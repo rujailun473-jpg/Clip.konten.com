@@ -86,9 +86,15 @@ body {
   .grid-2 { grid-template-columns: 1fr; }
 }
 
-/* Tombol File Input yang pasti terdeteksi di Android WebView */
-.file-btn-wrap {
-  position: relative;
+.hidden-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.file-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -96,19 +102,10 @@ body {
   padding: 11px 12px;
   font-size: 0.82rem;
   font-weight: 700;
-  overflow: hidden;
   cursor: pointer;
+  text-align: center;
 }
-.file-btn-wrap.primary { background: var(--primary); color: #fff; }
-.file-btn-wrap.muted { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
-.file-btn-wrap input[type="file"] {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  cursor: pointer;
-}
+.file-btn.primary { background: var(--primary); color: #fff; }
 
 .status-box {
   background: #090c10;
@@ -116,7 +113,7 @@ body {
   border-radius: 8px;
   padding: 8px 10px;
   font-size: 0.76rem;
-  color: #cbd5e1;
+  color: #34d399;
   line-height: 1.4;
 }
 
@@ -159,7 +156,7 @@ textarea { resize: vertical; line-height: 1.4; }
 }
 .switch-label input { width: 16px; height: 16px; accent-color: var(--accent); }
 
-/* STAGE VIDEO UTAMA */
+/* STAGE VIDEO TUNGGAL */
 .stage-outer {
   display: flex;
   justify-content: center;
@@ -177,77 +174,27 @@ textarea { resize: vertical; line-height: 1.4; }
   border-radius: 10px;
   overflow: hidden;
   display: flex;
-  flex-direction: column;
   justify-content: center;
   align-items: center;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
 }
 
-/* Rasio Ukuran Bingkai */
-.frame-stage.ratio-9-16 { width: 230px; height: 409px; }
-.frame-stage.ratio-9-14 { width: 240px; height: 373px; }
-.frame-stage.ratio-4-5  { width: 260px; height: 325px; }
+.frame-stage.ratio-9-16 { width: 240px; height: 426px; }
+.frame-stage.ratio-9-14 { width: 245px; height: 381px; }
+.frame-stage.ratio-4-5  { width: 265px; height: 331px; }
 .frame-stage.ratio-1-1  { width: 280px; height: 280px; }
 .frame-stage.ratio-16-9 { width: 100%; max-width: 340px; height: 191px; }
 
-/* Mode Tampilan Kamera */
-.frame-stage.mode-single #mainVideo {
+#mainVideo {
   width: 100%;
   height: 100%;
   object-fit: cover;
   object-position: 50% 45%;
-  z-index: 2;
-}
-.frame-stage.mode-single #bgBlurVideo,
-.frame-stage.mode-single #splitBottomVideo {
-  display: none;
+  background: #000;
 }
 
-.frame-stage.mode-fit #bgBlurVideo {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  filter: blur(14px) brightness(0.45);
-  transform: scale(1.1);
-  z-index: 1;
-}
-.frame-stage.mode-fit #mainVideo {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  z-index: 2;
-}
-.frame-stage.mode-fit #splitBottomVideo {
-  display: none;
-}
-
-.frame-stage.mode-split #bgBlurVideo {
-  display: none;
-}
-.frame-stage.mode-split #mainVideo {
-  width: 100%;
-  height: 50%;
-  object-fit: cover;
-  object-position: 25% 45%;
-  border-bottom: 2px solid #000;
-  z-index: 2;
-}
-.frame-stage.mode-split #splitBottomVideo {
-  display: block;
-  width: 100%;
-  height: 50%;
-  object-fit: cover;
-  object-position: 75% 45%;
-  z-index: 2;
-}
-
-/* Overlays */
 .overlay-hook {
   position: absolute;
-  top: 16px;
+  top: 14px;
   left: 10px;
   right: 10px;
   background: #facc15;
@@ -257,11 +204,12 @@ textarea { resize: vertical; line-height: 1.4; }
   text-align: center;
   padding: 5px 8px;
   border-radius: 6px;
+  pointer-events: none;
   z-index: 5;
 }
 .overlay-sub {
   position: absolute;
-  bottom: 58px;
+  bottom: 64px;
   left: 10px;
   right: 10px;
   background: rgba(0, 0, 0, 0.78);
@@ -271,11 +219,12 @@ textarea { resize: vertical; line-height: 1.4; }
   text-align: center;
   padding: 4px 8px;
   border-radius: 6px;
+  pointer-events: none;
   z-index: 5;
 }
 .overlay-cta {
   position: absolute;
-  bottom: 18px;
+  bottom: 32px;
   left: 10px;
   right: 10px;
   background: #ef4444;
@@ -285,19 +234,11 @@ textarea { resize: vertical; line-height: 1.4; }
   text-align: center;
   padding: 6px 8px;
   border-radius: 6px;
+  pointer-events: none;
   z-index: 6;
 }
 
-.scrubber-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 8px 0 10px;
-}
-.scrubber-row input[type="range"] { flex: 1; accent-color: var(--accent); }
-.time-text { font-size: 0.72rem; font-family: monospace; color: var(--muted); white-space: nowrap; }
-
-.slider-panel { display: flex; flex-direction: column; gap: 8px; margin: 8px 0 10px; }
+.slider-panel { margin: 8px 0 10px; }
 .slider-item label { font-size: 0.76rem; color: var(--muted); }
 .slider-item input[type="range"] { width: 100%; margin-top: 4px; accent-color: var(--primary); }
 
@@ -364,5 +305,4 @@ textarea { resize: vertical; line-height: 1.4; }
   font-size: 0.76rem;
   font-weight: 700;
   cursor: pointer;
-  }
-  
+}
