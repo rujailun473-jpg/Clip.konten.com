@@ -1,9 +1,5 @@
 // =========================================================================
-// AUTOCLIPPER STUDIO — CORE ENGINE
-// 1. Multi-Aspect Ratio Frame (9:16, 9:14, 4:5, 1:1, 16:9) + Single/Split
-// 2. Auto Face-Tracking (Native FaceDetector + Lightweight Skin/Motion Fallback)
-// 3. Auto-Cutter (Briefing Parser + Smart Local Matcher / Gemini AI)
-// 4. Direct Canvas Video Export (MediaRecorder)
+// AUTOCLIPPER UNIVERSAL — ANDROID WEBVIEW SAFE ENGINE
 // =========================================================================
 
 const FRAME_PRESETS = {
@@ -14,53 +10,61 @@ const FRAME_PRESETS = {
   "16:9": { w: 960, h: 540 },
 };
 
+const NICHE_PRESETS = {
+  general:    { hook: "MOMEN PALING SERU!", tags: "#fyp #viral #klip #reels" },
+  automotive: { hook: "DETAIL & SUARA MESINNYA!", tags: "#otomotif #modifikasi #reviewmotor #fyp" },
+  product:    { hook: "JUJUR REVIEW PRODUK INI!", tags: "#skincare #reviewjujur #racunbelanja #fyp" },
+  gaming:     { hook: "CLUTCH PALING GILA!", tags: "#gaming #highlight #gameplay #fyp" },
+  podcast:    { hook: "TOP 3 MOMEN NGAKAK!", tags: "#podcast #komedi #obrolanseru #fyp" },
+};
+
 const state = {
+  videoUrl: null,
   aspectRatio: "9:16",
   layoutMode: "single",
   autoTrack: true,
   manualX1: 0.5,
   manualX2: 0.75,
-  // Target & smoothed focus coordinates (0.0 - 1.0)
   targetX1: 0.5,
   targetY1: 0.45,
   smoothX1: 0.5,
   smoothY1: 0.45,
   targetX2: 0.75,
   smoothX2: 0.75,
-  // Timeline & overlays
   clips: [],
   activeClipIndex: -1,
   isPlayingSequence: false,
-  isRecording: false,
   overlayHook: "",
   overlaySub: "",
   overlayCta: "",
 };
 
 const dom = {
+  videoInput: document.getElementById("videoInput"),
+  srtInput: document.getElementById("srtInput"),
+  videoStatus: document.getElementById("videoStatus"),
+  sourceVideo: document.getElementById("sourceVideo"),
+  stageCanvas: document.getElementById("stageCanvas"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
   layoutModeSelect: document.getElementById("layoutModeSelect"),
   faceTrackToggle: document.getElementById("faceTrackToggle"),
   trackStatusBadge: document.getElementById("trackStatusBadge"),
+  btnTogglePlay: document.getElementById("btnTogglePlay"),
+  videoSeekBar: document.getElementById("videoSeekBar"),
+  timeDisplay: document.getElementById("timeDisplay"),
   manualX1: document.getElementById("manualX1"),
   manualX1Val: document.getElementById("manualX1Val"),
   manualX2: document.getElementById("manualX2"),
   manualX2Val: document.getElementById("manualX2Val"),
   splitControlGroup: document.getElementById("splitControlGroup"),
-  stageCanvas: document.getElementById("stageCanvas"),
-  sourceVideo: document.getElementById("sourceVideo"),
-  videoInput: document.getElementById("videoInput"),
-  srtInput: document.getElementById("srtInput"),
-  videoStatus: document.getElementById("videoStatus"),
-  transcriptInput: document.getElementById("transcriptInput"),
-  rawBriefInput: document.getElementById("rawBriefInput"),
-  btnLoadDemo: document.getElementById("btnLoadDemo"),
-  briefBrand: document.getElementById("briefBrand"),
-  briefHook: document.getElementById("briefHook"),
+  nicheSelect: document.getElementById("nicheSelect"),
   briefMinDur: document.getElementById("briefMinDur"),
   briefMaxDur: document.getElementById("briefMaxDur"),
+  briefHook: document.getElementById("briefHook"),
   briefCta: document.getElementById("briefCta"),
-  briefHashtags: document.getElementById("briefHashtags"),
+  briefBrand: document.getElementById("briefBrand"),
+  rawBriefInput: document.getElementById("rawBriefInput"),
+  transcriptInput: document.getElementById("transcriptInput"),
   geminiKey: document.getElementById("geminiKey"),
   btnAutoCut: document.getElementById("btnAutoCut"),
   cutStatus: document.getElementById("cutStatus"),
@@ -76,7 +80,7 @@ const dom = {
 
 const ctx = dom.stageCanvas.getContext("2d", { alpha: false });
 
-// Offscreen micro-canvas untuk deteksi wajah fallback (hemat RAM & CPU)
+// Micro-canvas 64x36 untuk deteksi wajah & objek ringan (RAM 4GB safe)
 const trackCanvas = document.createElement("canvas");
 trackCanvas.width = 64;
 trackCanvas.height = 36;
@@ -86,12 +90,11 @@ let nativeFaceDetector = null;
 if ("FaceDetector" in window) {
   try {
     nativeFaceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 2 });
-  } catch (e) {
+  } catch (_) {
     nativeFaceDetector = null;
   }
 }
 
-// Simpan / Muat Gemini API Key lokal
 if (localStorage.getItem("ac_gemini_key")) {
   dom.geminiKey.value = localStorage.getItem("ac_gemini_key");
 }
@@ -100,29 +103,89 @@ dom.geminiKey.addEventListener("change", () => {
 });
 
 // =========================================================================
-// 1. KONTROL UKURAN BINGKAI & TATA LETAK
+// 1. MEMUAT VIDEO LOKAL (PERBAIKAN ANDROID WEBVIEW / APK)
+// =========================================================================
+dom.videoInput.addEventListener("change", (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  if (state.videoUrl) {
+    URL.revokeObjectURL(state.videoUrl);
+  }
+
+  state.videoUrl = URL.createObjectURL(file);
+  dom.sourceVideo.src = state.videoUrl;
+  dom.sourceVideo.load();
+  dom.videoStatus.textContent = `⏳ Memuat "${file.name}"...`;
+});
+
+dom.sourceVideo.addEventListener("loadedmetadata", () => {
+  const vw = dom.sourceVideo.videoWidth;
+  const vh = dom.sourceVideo.videoHeight;
+  const dur = dom.sourceVideo.duration || 0;
+
+  dom.videoSeekBar.max = Math.max(1, dur);
+  dom.timeDisplay.textContent = `00:00 / ${formatTime(dur)}`;
+  dom.videoStatus.textContent = `✅ Video siap (${vw}×${vh} • ${formatTime(dur)})`;
+
+  // Pancing frame pertama agar langsung tampil di kanvas meski sedang pause
+  dom.sourceVideo.currentTime = Math.min(0.2, dur * 0.1);
+});
+
+dom.sourceVideo.addEventListener("seeked", () => {
+  drawFrameOnce();
+});
+
+dom.sourceVideo.addEventListener("loadeddata", () => {
+  drawFrameOnce();
+});
+
+dom.sourceVideo.addEventListener("error", () => {
+  dom.videoStatus.textContent = "❌ Format video tidak didukung WebView Android. Gunakan MP4 (H.264).";
+});
+
+dom.srtInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  dom.transcriptInput.value = await file.text();
+  dom.cutStatus.textContent = `📄 Subtitle "${file.name}" berhasil dimuat.`;
+});
+
+// Kontrol Play/Pause & Seekbar
+dom.btnTogglePlay.addEventListener("click", () => {
+  if (!dom.sourceVideo.src) return;
+  if (dom.sourceVideo.paused) {
+    dom.sourceVideo.play();
+  } else {
+    dom.sourceVideo.pause();
+  }
+});
+
+dom.videoSeekBar.addEventListener("input", (e) => {
+  if (!dom.sourceVideo.src) return;
+  dom.sourceVideo.currentTime = Number(e.target.value);
+});
+
+// =========================================================================
+// 2. PENGATURAN BINGKAI, MODE & AUTO-TRACK
 // =========================================================================
 dom.aspectRatioSelect.addEventListener("change", (e) => {
   state.aspectRatio = e.target.value;
-  const preset = FRAME_PRESETS[state.aspectRatio] || FRAME_PRESETS["9:16"];
-  dom.stageCanvas.width = preset.w;
-  dom.stageCanvas.height = preset.h;
+  const p = FRAME_PRESETS[state.aspectRatio] || FRAME_PRESETS["9:16"];
+  dom.stageCanvas.width = p.w;
+  dom.stageCanvas.height = p.h;
+  drawFrameOnce();
 });
 
 dom.layoutModeSelect.addEventListener("change", (e) => {
   state.layoutMode = e.target.value;
-  if (state.layoutMode === "split") {
-    dom.splitControlGroup.classList.remove("hidden");
-  } else {
-    dom.splitControlGroup.classList.add("hidden");
-  }
+  dom.splitControlGroup.classList.toggle("hidden", state.layoutMode !== "split");
+  drawFrameOnce();
 });
 
 dom.faceTrackToggle.addEventListener("change", (e) => {
   state.autoTrack = e.target.checked;
-  dom.trackStatusBadge.textContent = state.autoTrack
-    ? "🎯 Face-Track: Aktif"
-    : "✋ Face-Track: Manual";
+  dom.trackStatusBadge.textContent = state.autoTrack ? "🎯 Auto-Track: Aktif" : "✋ Kamera: Manual";
   dom.trackStatusBadge.className = state.autoTrack ? "pill ok" : "pill warn";
   if (!state.autoTrack) {
     state.targetX1 = state.manualX1;
@@ -134,176 +197,139 @@ dom.manualX1.addEventListener("input", (e) => {
   const pct = Number(e.target.value);
   dom.manualX1Val.textContent = `${pct}%`;
   state.manualX1 = pct / 100;
-  if (!state.autoTrack) state.targetX1 = state.manualX1;
+  if (!state.autoTrack) {
+    state.targetX1 = state.manualX1;
+    state.smoothX1 = state.manualX1;
+    drawFrameOnce();
+  }
 });
 
 dom.manualX2.addEventListener("input", (e) => {
   const pct = Number(e.target.value);
   dom.manualX2Val.textContent = `${pct}%`;
   state.manualX2 = pct / 100;
-  if (!state.autoTrack) state.targetX2 = state.manualX2;
+  if (!state.autoTrack) {
+    state.targetX2 = state.manualX2;
+    state.smoothX2 = state.manualX2;
+    drawFrameOnce();
+  }
 });
 
 // =========================================================================
-// 2. MUAT VIDEO LOKAL & FILE SUBTITLE
-// =========================================================================
-dom.videoInput.addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  const url = URL.createObjectURL(file);
-  dom.sourceVideo.src = url;
-  dom.sourceVideo.muted = false;
-  dom.videoStatus.textContent = `✅ Video siap: ${file.name}`;
-  dom.sourceVideo.onloadeddata = () => {
-    dom.sourceVideo.currentTime = 0.5;
-  };
-});
-
-dom.srtInput.addEventListener("change", async (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
-  dom.transcriptInput.value = await file.text();
-  dom.cutStatus.textContent = `📄 Subtitle "${file.name}" siap dianalisis.`;
-});
-
-// =========================================================================
-// 3. ENGINE PELACAK WAJAH OTOMATIS (AUTO FACE-TRACKING)
+// 3. PELACAK WAJAH & SUBJEK OTOMATIS
 // =========================================================================
 let lastDetectTime = 0;
 
-async function detectFacesInVideo(now) {
-  if (!state.autoTrack) return;
+async function detectFocusPoint(now) {
+  if (!state.autoTrack || state.layoutMode === "blur") return;
   if (dom.sourceVideo.readyState < 2 || dom.sourceVideo.paused) return;
-  if (now - lastDetectTime < 180) return; // Jalankan ~5.5x/detik agar ringan di RAM 4GB
+  if (now - lastDetectTime < 200) return;
   lastDetectTime = now;
 
   const vw = dom.sourceVideo.videoWidth;
   const vh = dom.sourceVideo.videoHeight;
   if (!vw || !vh) return;
 
-  // Metode A: Native Chromium Hardware FaceDetector (Akurasi tinggi & nol beban RAM)
   if (nativeFaceDetector) {
     try {
       const faces = await nativeFaceDetector.detect(dom.sourceVideo);
       if (faces && faces.length > 0) {
-        // Urutkan wajah dari kiri ke kanan
         faces.sort((a, b) => a.boundingBox.x - b.boundingBox.x);
         const f1 = faces[0].boundingBox;
         state.targetX1 = clamp((f1.x + f1.width * 0.5) / vw, 0.15, 0.85);
         state.targetY1 = clamp((f1.y + f1.height * 0.45) / vh, 0.2, 0.8);
-
         if (faces.length > 1) {
           const f2 = faces[faces.length - 1].boundingBox;
           state.targetX2 = clamp((f2.x + f2.width * 0.5) / vw, 0.15, 0.85);
         }
-        dom.trackStatusBadge.textContent = `🎯 Terkunci (${faces.length} Wajah)`;
         return;
       }
-    } catch (_) {
-      // Lanjut ke Metode B jika browser membatasi FaceDetector
-    }
+    } catch (_) {}
   }
 
-  // Metode B: Fallback Mikro Skin-Tone & Upper-Body Centroid Tracker (64x36 px)
+  // Fallback centroid warna kulit & area fokus tengah-atas
   trackCtx.drawImage(dom.sourceVideo, 0, 0, 64, 36);
-  const imgData = trackCtx.getImageData(0, 0, 64, 36).data;
+  const data = trackCtx.getImageData(0, 0, 64, 36).data;
+  let wL = 0, xL = 0, wR = 0, xR = 0, wT = 0, xT = 0, yT = 0;
 
-  let leftWeight = 0, leftSumX = 0;
-  let rightWeight = 0, rightSumX = 0;
-  let totalWeight = 0, totalSumX = 0, totalSumY = 0;
-
-  // Fokus pada area wajah/kepala (y: 10% - 75% tinggi frame)
-  for (let y = 4; y < 28; y++) {
+  for (let y = 3; y < 30; y++) {
     for (let x = 2; x < 62; x++) {
       const i = (y * 64 + x) * 4;
-      const r = imgData[i];
-      const g = imgData[i + 1];
-      const b = imgData[i + 2];
-
-      // Deteksi spektrum warna kulit natural (YCbCr / RGB heuristic)
-      const isSkin =
-        r > 75 && g > 40 && b > 25 &&
-        r > g && r > b &&
-        Math.abs(r - g) > 12;
-
-      if (isSkin) {
+      const r = data[i], g = data[i + 1], b = data[i + 2];
+      if (r > 75 && g > 40 && b > 25 && r > g && r > b && Math.abs(r - g) > 12) {
         const nx = x / 64;
         const ny = y / 36;
-        totalWeight++;
-        totalSumX += nx;
-        totalSumY += ny;
-
-        if (nx < 0.5) {
-          leftWeight++;
-          leftSumX += nx;
-        } else {
-          rightWeight++;
-          rightSumX += nx;
-        }
+        wT++; xT += nx; yT += ny;
+        if (nx < 0.5) { wL++; xL += nx; } else { wR++; xR += nx; }
       }
     }
   }
 
-  if (totalWeight > 8) {
-    if (state.layoutMode === "split" && leftWeight > 4 && rightWeight > 4) {
-      state.targetX1 = clamp(leftSumX / leftWeight, 0.15, 0.45);
-      state.targetX2 = clamp(rightSumX / rightWeight, 0.55, 0.85);
+  if (wT > 6) {
+    if (state.layoutMode === "split" && wL > 3 && wR > 3) {
+      state.targetX1 = clamp(xL / wL, 0.15, 0.45);
+      state.targetX2 = clamp(xR / wR, 0.55, 0.85);
     } else {
-      state.targetX1 = clamp(totalSumX / totalWeight, 0.18, 0.82);
-      state.targetY1 = clamp(totalSumY / totalWeight, 0.25, 0.75);
+      state.targetX1 = clamp(xT / wT, 0.15, 0.85);
+      state.targetY1 = clamp(yT / wT, 0.2, 0.8);
     }
-    dom.trackStatusBadge.textContent = "🎯 Tracking Wajah Aktif";
   }
 }
 
-function clamp(val, min, max) {
-  return Math.max(min, Math.min(max, val));
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
 }
 
 // =========================================================================
-// 4. RENDER LOOP KANVAS (30/60 FPS SMOOTH CAMERA + OVERLAYS)
+// 4. RENDER LOOP KANVAS
 // =========================================================================
-function renderLoop(now) {
-  detectFacesInVideo(now);
-
-  // Smooth gimbal interpolation (lerp)
-  const ease = 0.14;
-  state.smoothX1 += (state.targetX1 - state.smoothX1) * ease;
-  state.smoothY1 += (state.targetY1 - state.smoothY1) * ease;
-  state.smoothX2 += (state.targetX2 - state.smoothX2) * ease;
-
+function drawFrameOnce() {
   const cw = dom.stageCanvas.width;
   const ch = dom.stageCanvas.height;
 
   ctx.fillStyle = "#000000";
   ctx.fillRect(0, 0, cw, ch);
 
-  if (dom.sourceVideo.readyState >= 2) {
-    if (state.layoutMode === "split") {
-      // Split Atas (Pembicara 1) & Bawah (Pembicara 2)
+  if (dom.sourceVideo.readyState >= 2 && dom.sourceVideo.videoWidth > 0) {
+    if (state.layoutMode === "blur") {
+      drawFullWithBlurBackdrop(dom.sourceVideo, cw, ch);
+    } else if (state.layoutMode === "split") {
       const halfH = Math.floor(ch / 2);
       drawCroppedVideo(dom.sourceVideo, 0, 0, cw, halfH - 2, state.smoothX1, 0.45);
       drawCroppedVideo(dom.sourceVideo, 0, halfH + 2, cw, halfH - 2, state.smoothX2, 0.45);
     } else {
-      // Single Full Frame mengikuti wajah utama
       drawCroppedVideo(dom.sourceVideo, 0, 0, cw, ch, state.smoothX1, state.smoothY1);
     }
   } else {
-    // Placeholder panduan sebelum video dimuat
     ctx.fillStyle = "#141923";
     ctx.fillRect(0, 0, cw, ch);
     ctx.fillStyle = "#94a3b8";
-    ctx.font = "bold 22px system-ui";
+    ctx.font = "bold 20px system-ui";
     ctx.textAlign = "center";
-    ctx.fillText(`Bingkai ${state.aspectRatio} (${cw}×${ch})`, cw / 2, ch / 2 - 14);
-    ctx.font = "16px system-ui";
-    ctx.fillText("Pilih video MP4 untuk mulai clipping", cw / 2, ch / 2 + 18);
+    ctx.fillText(`Bingkai ${state.aspectRatio} (${cw}×${ch})`, cw / 2, ch / 2 - 12);
+    ctx.font = "15px system-ui";
+    ctx.fillText("Ketuk 'Masukkan Video' di atas", cw / 2, ch / 2 + 18);
   }
 
-  // Gambar Overlays (Hook 0-3d, Subtitle, & CTA Akhir) langsung ke kanvas
-  drawCanvasOverlays(cw, ch);
+  drawOverlays(cw, ch);
+}
 
-  // Cek apakah klip sedang berjalan dalam mode sequence
+function renderLoop(now) {
+  detectFocusPoint(now);
+
+  const ease = 0.15;
+  state.smoothX1 += (state.targetX1 - state.smoothX1) * ease;
+  state.smoothY1 += (state.targetY1 - state.smoothY1) * ease;
+  state.smoothX2 += (state.targetX2 - state.smoothX2) * ease;
+
+  if (!dom.sourceVideo.paused && dom.sourceVideo.readyState >= 2) {
+    drawFrameOnce();
+    const cur = dom.sourceVideo.currentTime || 0;
+    const dur = dom.sourceVideo.duration || 0;
+    dom.videoSeekBar.value = cur;
+    dom.timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+  }
+
   if (state.isPlayingSequence && state.activeClipIndex >= 0) {
     const activeClip = state.clips[state.activeClipIndex];
     if (activeClip && dom.sourceVideo.currentTime >= activeClip.end) {
@@ -321,67 +347,75 @@ function drawCroppedVideo(video, dx, dy, dw, dh, focusX, focusY) {
 
   const targetRatio = dw / dh;
   const sourceRatio = vw / vh;
-
   let sw, sh, sx, sy;
 
   if (sourceRatio > targetRatio) {
-    // Video lebih lebar dari bingkai -> potong kiri/kanan mengikuti focusX wajah
     sh = vh;
     sw = vh * targetRatio;
-    const centerX = focusX * vw;
-    sx = clamp(centerX - sw / 2, 0, vw - sw);
+    sx = clamp(focusX * vw - sw / 2, 0, vw - sw);
     sy = 0;
   } else {
-    // Video lebih tinggi dari bingkai -> potong atas/bawah mengikuti focusY wajah
     sw = vw;
     sh = vw / targetRatio;
-    const centerY = focusY * vh;
     sx = 0;
-    sy = clamp(centerY - sh / 2, 0, vh - sh);
+    sy = clamp(focusY * vh - sh / 2, 0, vh - sh);
   }
 
   ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
-function drawCanvasOverlays(cw, ch) {
-  // 1. Hook Banner di bagian atas
+function drawFullWithBlurBackdrop(video, cw, ch) {
+  const vw = video.videoWidth;
+  const vh = video.videoHeight;
+  if (!vw || !vh) return;
+
+  // 1. Latar belakang penuh dengan blur & redup
+  ctx.save();
+  try { ctx.filter = "blur(16px) brightness(0.55)"; } catch (_) {}
+  drawCroppedVideo(video, 0, 0, cw, ch, 0.5, 0.5);
+  ctx.restore();
+
+  ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
+  ctx.fillRect(0, 0, cw, ch);
+
+  // 2. Video asli utuh di tengah (tidak terpotong)
+  const scale = Math.min(cw / vw, ch / vh);
+  const drawW = vw * scale;
+  const drawH = vh * scale;
+  const drawX = (cw - drawW) / 2;
+  const drawY = (ch - drawH) / 2;
+  ctx.drawImage(video, 0, 0, vw, vh, drawX, drawY, drawW, drawH);
+}
+
+function drawOverlays(cw, ch) {
   if (state.overlayHook) {
-    const padX = 28;
-    const boxW = cw - padX * 2;
     const boxY = Math.round(ch * 0.06);
     ctx.fillStyle = "#facc15";
-    roundRect(ctx, padX, boxY, boxW, 64, 12, true);
-
+    roundRect(ctx, 24, boxY, cw - 48, 58, 10, true);
     ctx.fillStyle = "#0f172a";
-    ctx.font = "900 22px system-ui";
+    ctx.font = "900 20px system-ui";
     ctx.textAlign = "center";
-    ctx.fillText(state.overlayHook.toUpperCase().slice(0, 38), cw / 2, boxY + 40);
+    ctx.fillText(state.overlayHook.toUpperCase().slice(0, 36), cw / 2, boxY + 36);
   }
 
-  // 2. Subtitle Dialog
   if (state.overlaySub) {
     const subY = Math.round(ch * 0.80);
-    const boxW = cw - 48;
     ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
-    roundRect(ctx, 24, subY - 32, boxW, 56, 10, true);
-
+    roundRect(ctx, 24, subY - 30, cw - 48, 50, 8, true);
     ctx.fillStyle = "#ffffff";
-    ctx.font = "700 18px system-ui";
+    ctx.font = "700 17px system-ui";
     ctx.textAlign = "center";
-    ctx.fillText(state.overlaySub.slice(0, 48), cw / 2, subY + 2);
+    ctx.fillText(state.overlaySub.slice(0, 46), cw / 2, subY + 2);
   }
 
-  // 3. Soft CTA Akhir
   if (state.overlayCta) {
     const ctaY = Math.round(ch * 0.89);
-    const boxW = cw - 48;
     ctx.fillStyle = "#ef4444";
-    roundRect(ctx, 24, ctaY - 30, boxW, 52, 10, true);
-
+    roundRect(ctx, 24, ctaY - 28, cw - 48, 48, 8, true);
     ctx.fillStyle = "#ffffff";
-    ctx.font = "800 17px system-ui";
+    ctx.font = "800 16px system-ui";
     ctx.textAlign = "center";
-    ctx.fillText(state.overlayCta.slice(0, 46), cw / 2, ctaY + 2);
+    ctx.fillText(state.overlayCta.slice(0, 44), cw / 2, ctaY + 2);
   }
 }
 
@@ -400,33 +434,11 @@ function roundRect(context, x, y, width, height, radius, fill) {
   if (fill) context.fill();
 }
 
-// Mulai loop render kanvas
 requestAnimationFrame(renderLoop);
 
 // =========================================================================
-// 5. AUTO-CUTTER PENCARI MOMEN (BRIEFING + AI)
+// 5. CUTTER OTOMATIS UNIVERSAL (BISA TANPA TRANSKRIP MAUPUN PAKAI BRIEF/AI)
 // =========================================================================
-dom.btnLoadDemo.addEventListener("click", () => {
-  dom.rawBriefInput.value = `Durasi video 30 - 90 detik
-Judul: "TOP 3 MOMEN PALING PECAH DI PODCAST"
-Penutup: Momen bahas produk Herborist secara utuh jangan dipotong di tengah kalimat
-CTA: "Cek produknya di official store sekarang"
-Hashtag: #podcast #klipviral #kontencom`;
-
-  if (!dom.transcriptInput.value.trim()) {
-    dom.transcriptInput.value = `00:12 Host: Lu pernah nggak sih salah naik motor orang di parkiran minimarket?
-00:18 Tamu: Pernah bang! Gue udah pasang helm, nyalain mesin, eh yang punya motor keluar bawa es teh! [tertawa]
-00:25 Host: Ngakak banget terus lu bilang apa?!
-01:40 Tamu: Yang paling absurd waktu gue disangka tukang parkir sama emak-emak, dikasih dua ribu langsung gue terima! [ketawa]
-01:49 Host: Anjir gila malah lu kantongin duitnya!
-03:10 Tamu: Eh tapi serius, habis panas-panasan di jalan gue selalu pakai Herborist Body Scrub biar kulit tetap halus dan wanginya seger banget.
-03:20 Host: Bener sih, butiran scrub-nya lembut dan aromanya tahan lama dipakai rutin.`;
-  }
-
-  extractBriefRules();
-  dom.cutStatus.textContent = "✅ Contoh briefing & transkrip dimuat. Klik 'Potong & Cari Momen Otomatis'.";
-});
-
 dom.rawBriefInput.addEventListener("blur", extractBriefRules);
 
 function extractBriefRules() {
@@ -438,7 +450,6 @@ function extractBriefRules() {
     dom.briefMinDur.value = durMatch[1];
     dom.briefMaxDur.value = durMatch[2];
   }
-
   const titleMatch = raw.match(/Judul[:\s]*["“]([^"”]+)["”]/i);
   if (titleMatch) dom.briefHook.value = titleMatch[1];
 
@@ -447,119 +458,144 @@ function extractBriefRules() {
 
   const prodMatch = raw.match(/produk\s+([A-Za-z0-9\s]+?)(?:\s+secara|\n|$)/i);
   if (prodMatch) dom.briefBrand.value = prodMatch[1].trim();
-
-  const tags = raw.match(/#[A-Za-z0-9_]+/g);
-  if (tags) dom.briefHashtags.value = [...new Set(tags)].join(" ");
 }
 
 dom.btnAutoCut.addEventListener("click", async () => {
   extractBriefRules();
-  const entries = parseTranscriptLines(dom.transcriptInput.value);
-  if (entries.length === 0) {
-    alert("Masukkan transkrip / file .SRT terlebih dahulu agar cutter bisa membaca momen.");
+
+  const videoDur = dom.sourceVideo.duration || 0;
+  const rawTranscript = dom.transcriptInput.value.trim();
+  const niche = NICHE_PRESETS[dom.nicheSelect.value] || NICHE_PRESETS.general;
+
+  if (!videoDur && !rawTranscript) {
+    alert("Masukkan video terlebih dahulu agar cutter bisa memotong momen!");
     return;
   }
 
   const config = {
     brand: dom.briefBrand.value.trim(),
-    hook: dom.briefHook.value.trim() || "TOP MOMEN PODCAST",
-    cta: dom.briefCta.value.trim() || "Cek selengkapnya sekarang!",
+    hook: dom.briefHook.value.trim() || niche.hook,
+    cta: dom.briefCta.value.trim(),
     minDur: Number(dom.briefMinDur.value) || 30,
-    maxDur: Number(dom.briefMaxDur.value) || 90,
-    hashtags: dom.briefHashtags.value.trim(),
+    maxDur: Number(dom.briefMaxDur.value) || 60,
+    tags: niche.tags,
   };
 
-  const key = dom.geminiKey.value.trim();
-  dom.cutStatus.textContent = key
-    ? "🤖 AI sedang menganalisis transkrip & menyusun potongan momen..."
-    : "✂️ Memotong momen otomatis berdasarkan aturan briefing...";
+  const apiKey = dom.geminiKey.value.trim();
 
-  try {
-    if (key) {
-      state.clips = await cutWithGeminiAI(key, entries, config);
-    } else {
-      state.clips = cutWithLocalRules(entries, config);
+  // Mode 1: Jika ada transkrip/SRT -> potong berdasarkan dialog/briefing
+  if (rawTranscript) {
+    const entries = parseTranscriptLines(rawTranscript);
+    if (entries.length > 0) {
+      if (apiKey) {
+        dom.cutStatus.textContent = "🤖 Memotong momen cerdas dengan Gemini AI...";
+        try {
+          state.clips = await cutWithGeminiAI(apiKey, entries, config);
+        } catch (_) {
+          state.clips = cutFromTranscriptLocal(entries, config);
+        }
+      } else {
+        state.clips = cutFromTranscriptLocal(entries, config);
+      }
+      renderClipTimeline(config);
+      dom.cutStatus.textContent = `✅ ${state.clips.length} potongan momen ditemukan dari transkrip!`;
+      return;
     }
-    renderClipTimeline(config);
-    dom.cutStatus.textContent = `✅ Ditemukan ${state.clips.length} potongan siap putar & simpan!`;
-  } catch (err) {
-    console.error(err);
-    state.clips = cutWithLocalRules(entries, config);
-    renderClipTimeline(config);
-    dom.cutStatus.textContent = "✅ Potongan disusun dengan Smart Local Cutter.";
   }
+
+  // Mode 2: Auto-Scan Video Langsung (Cocok untuk Otomotif, Gaming, Review Produk, Vlog tanpa SRT)
+  state.clips = cutVideoTimelineAutomatically(videoDur, config);
+  renderClipTimeline(config);
+  dom.cutStatus.textContent = `✅ Video (${formatTime(videoDur)}) otomatis dipotong menjadi ${state.clips.length} segmen highlight!`;
 });
+
+function cutVideoTimelineAutomatically(totalVideoDur, config) {
+  const safeDur = Math.max(6, totalVideoDur);
+  const targetTotal = clamp(Math.round((config.minDur + config.maxDur) / 2), 10, Math.floor(safeDur));
+
+  // Jika video pendek (<= target durasi), ambil utuh + hook + CTA
+  if (safeDur <= config.maxDur) {
+    const cuts = [];
+    if (dom.briefHook.value.trim()) {
+      cuts.push({
+        role: "Hook Pembuka (0-3d)",
+        type: "hook",
+        start: 0,
+        end: Math.min(3, safeDur),
+        text: config.hook,
+      });
+    }
+    cuts.push({
+      role: "Klip Utama Utuh",
+      type: "moment",
+      start: 0,
+      end: Math.floor(safeDur),
+      text: "Bagian utama video",
+    });
+    if (config.cta) {
+      cuts.push({
+        role: "CTA Akhir",
+        type: "cta",
+        start: Math.max(0, Math.floor(safeDur) - 3),
+        end: Math.floor(safeDur),
+        text: config.cta,
+      });
+    }
+    return cuts;
+  }
+
+  // Bagi video panjang menjadi 3 bagian highlight (Pembuka Aksi, Puncak Tengah, Penutup)
+  const segLen = Math.max(5, Math.floor(targetTotal / 3));
+  const p1 = Math.floor(safeDur * 0.12);
+  const p2 = Math.floor(safeDur * 0.48);
+  const p3 = Math.max(p2 + segLen + 2, Math.floor(safeDur * 0.80));
+
+  const cuts = [
+    {
+      role: "Hook Pembuka (0-3d)",
+      type: "hook",
+      start: p2,
+      end: Math.min(safeDur, p2 + 3),
+      text: config.hook,
+    },
+    {
+      role: "Highlight #1 (Awal)",
+      type: "moment",
+      start: p1,
+      end: Math.min(safeDur, p1 + segLen),
+      text: "Momen pembuka pilihan",
+    },
+    {
+      role: "Highlight #2 (Klimaks)",
+      type: "moment",
+      start: p2,
+      end: Math.min(safeDur, p2 + segLen),
+      text: "Momen puncak utama",
+    },
+    {
+      role: "Highlight #3 (Penutup)",
+      type: "product",
+      start: Math.min(safeDur - segLen, p3),
+      end: Math.min(safeDur, p3 + segLen),
+      text: "Momen penutup / detail akhir",
+    },
+  ];
+
+  if (config.cta) {
+    const last = cuts[cuts.length - 1];
+    cuts.push({
+      role: "CTA Akhir",
+      type: "cta",
+      start: Math.max(last.start, last.end - 3),
+      end: last.end,
+      text: config.cta,
+    });
+  }
+
+  return cuts;
+}
 
 function parseTranscriptLines(raw) {
   const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const result = [];
-  const srtTime = /(\d{1,2}:\d{2}:\d{2})[,.]\d+\s*-->\s*(\d{1,2}:\d{2}:\d{2})[,.]\d+/;
-
-  for (let i = 0; i < lines.length; i++) {
-    const mSrt = lines[i].match(srtTime);
-    if (mSrt) {
-      const start = toSeconds(mSrt[1]);
-      const end = Math.max(toSeconds(mSrt[2]), start + 4);
-      const text = lines[i + 1] || "";
-      if (text) result.push({ start, end, text });
-      continue;
-    }
-    const mSimple = lines[i].match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
-    if (mSimple) {
-      const start = toSeconds(mSimple[1]);
-      result.push({ start, end: start + 7, text: mSimple[2] });
-    }
-  }
-
-  for (let i = 0; i < result.length - 1; i++) {
-    const diff = result[i + 1].start - result[i].start;
-    if (diff > 0 && diff <= 12) result[i].end = result[i + 1].start;
-  }
-  return result;
-}
-
-function toSeconds(str) {
-  const p = str.split(":").map(Number);
-  return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
-}
-
-function formatTime(sec) {
-  const s = Math.max(0, Math.floor(sec));
-  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
-}
-
-// Cutter Offline Cerdas (Skoring Komedi + Deteksi Penutup Produk Utuh)
-function cutWithLocalRules(entries, config) {
-  const brandKeywords = config.brand.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
-  const hypeRegex = /(ngakak|tertawa|ketawa|wkwk|haha|anjir|gila|kocak|absurd|sumpah|parah|!|\?)/gi;
-
-  // Cari momen produk/topik wajib (utuh satu rangkaian kalimat)
-  let prodIdx = -1;
-  if (brandKeywords.length > 0) {
-    entries.forEach((e, idx) => {
-      const low = e.text.toLowerCase();
-      if (brandKeywords.some((kw) => low.includes(kw)) && prodIdx === -1) {
-        prodIdx = idx;
-      }
-    });
-  }
-
-  let prodSegment = null;
-  if (prodIdx !== -1) {
-    let endIdx = prodIdx;
-    while (endIdx < entries.length - 1 && entries[endIdx + 1].end - entries[prodIdx].start <= 20) {
-      endIdx++;
-    }
-    prodSegment = {
-      role: "Penutup: Bahasan Utama Utuh",
-      type: "product",
-      start: entries[prodIdx].start,
-      end: entries[endIdx].end,
-      text: entries.slice(prodIdx, endIdx + 1).map((x) => x.text).join(" "),
-    };
-  }
-
-  // Cari momen seru/lucu yang terpisah jaraknya
-  const scored = entries
-    .map((e, idx) => {
-      if (prodSegm
+  const s
