@@ -4,43 +4,56 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0b0e14" />
-  <title>AutoClipper Studio — Smart Cut & Face Track</title>
+  <title>AutoClipper Universal</title>
   <link rel="manifest" href="manifest.json" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
-      <h1>✂️ AutoClipper Studio</h1>
-      <span class="sub">Auto-Cut Brief/AI • Face-Track • Multi-Frame</span>
+      <h1>✂️ AutoClipper</h1>
+      <span class="sub">Universal Video Cutter • Auto-Frame</span>
     </div>
     <span id="totalDurBadge" class="pill warn">Total: 0d</span>
   </header>
 
   <main class="workspace">
-    <!-- PANEL 1: STAGE KANVAS & PILIHAN UKURAN BINGKAI -->
-    <section class="card stage-card">
+    <!-- PANEL 1: PILIH VIDEO & PREVIEW KANVAS -->
+    <section class="card">
       <div class="row-between">
-        <h2>1. Bingkai & Auto Face-Track</h2>
-        <span id="trackStatusBadge" class="pill ok">🎯 Face-Track: Aktif</span>
+        <h2>1. Layar & Ukuran Bingkai</h2>
+        <span id="trackStatusBadge" class="pill ok">🎯 Auto-Track: Aktif</span>
       </div>
 
-      <div class="grid-2">
+      <div class="grid-2 mb-8">
+        <label class="file-trigger primary">
+          🎬 Masukkan Video
+          <input type="file" id="videoInput" accept="video/mp4,video/webm,video/quicktime,video/*" hidden />
+        </label>
+        <label class="file-trigger muted">
+          📄 Subtitle (.SRT) Opsional
+          <input type="file" id="srtInput" accept=".srt,.vtt,.txt" hidden />
+        </label>
+      </div>
+      <p id="videoStatus" class="note">Pilih video dari galeri HP untuk mulai meng-clip.</p>
+
+      <div class="grid-2 mt-8">
         <div>
-          <label class="lbl" for="aspectRatioSelect">Ukuran Bingkai (Rasio)</label>
+          <label class="lbl" for="aspectRatioSelect">Ukuran Bingkai</label>
           <select id="aspectRatioSelect">
             <option value="9:16" selected>9:16 (TikTok / Reels / Shorts)</option>
-            <option value="9:14">9:14 (Vertikal Feed / Header)</option>
+            <option value="9:14">9:14 (Vertikal Feed)</option>
             <option value="4:5">4:5 (Instagram Portrait)</option>
             <option value="1:1">1:1 (Square / Kotak)</option>
             <option value="16:9">16:9 (YouTube Landscape)</option>
           </select>
         </div>
         <div>
-          <label class="lbl" for="layoutModeSelect">Tata Letak Kamera</label>
+          <label class="lbl" for="layoutModeSelect">Mode Bingkai</label>
           <select id="layoutModeSelect">
-            <option value="single" selected>1 Kamera (Ikuti Wajah Utama)</option>
-            <option value="split">Split Atas-Bawah (2 Pembicara)</option>
+            <option value="single" selected>Fokus Subjek (Ikuti Wajah)</option>
+            <option value="blur">Full Utuh + Latar Blur (Gaming/Produk)</option>
+            <option value="split">Split Atas-Bawah (2 Kamera)</option>
           </select>
         </div>
       </div>
@@ -48,7 +61,7 @@
       <div class="toggle-row">
         <label class="switch-label">
           <input type="checkbox" id="faceTrackToggle" checked />
-          <span>Bingkai Otomatis Mengikuti Wajah</span>
+          <span>Bingkai Otomatis Mengikuti Wajah / Subjek</span>
         </label>
       </div>
 
@@ -56,13 +69,20 @@
         <canvas id="stageCanvas" width="540" height="960"></canvas>
       </div>
 
+      <!-- Kontrol Pemutar & Timeline Manual -->
+      <div class="scrubber-row">
+        <button type="button" id="btnTogglePlay" class="mini-btn">⏯️</button>
+        <input type="range" id="videoSeekBar" min="0" max="100" step="0.1" value="0" />
+        <span id="timeDisplay" class="time-text">00:00 / 00:00</span>
+      </div>
+
       <div class="slider-panel">
         <div class="slider-item">
-          <label>Geser Kamera 1 (Manual / Offset): <b id="manualX1Val">50%</b></label>
+          <label>Posisi Kamera 1: <b id="manualX1Val">50%</b></label>
           <input type="range" id="manualX1" min="0" max="100" value="50" />
         </div>
         <div class="slider-item hidden" id="splitControlGroup">
-          <label>Geser Kamera 2 (Layar Bawah): <b id="manualX2Val">75%</b></label>
+          <label>Posisi Kamera 2 (Bawah): <b id="manualX2Val">75%</b></label>
           <input type="range" id="manualX2" min="0" max="100" value="75" />
         </div>
       </div>
@@ -75,91 +95,79 @@
       <p id="exportStatus" class="note"></p>
     </section>
 
-    <!-- PANEL 2: INPUT VIDEO & TRANSKRIP -->
-    <section class="card">
-      <h2>2. Sumber Video & Subtitle</h2>
-      <div class="grid-2">
-        <label class="file-trigger primary">
-          🎬 Pilih Video (MP4)
-          <input type="file" id="videoInput" accept="video/*" hidden />
-        </label>
-        <label class="file-trigger muted">
-          📄 Muat .SRT / .VTT
-          <input type="file" id="srtInput" accept=".srt,.vtt,.txt" hidden />
-        </label>
-      </div>
-      <p id="videoStatus" class="note">Belum ada video dimuat (streaming lokal hemat RAM).</p>
-
-      <label class="lbl" for="transcriptInput">Transkrip / Timestamp Video</label>
-      <textarea id="transcriptInput" rows="4" placeholder="Tempel isi file .SRT atau format timestamp (contoh: 01:15 dialog pembicara...)"></textarea>
-    </section>
-
-    <!-- PANEL 3: AUTO-CUTTER SESUAI BRIEF ATAU AI -->
+    <!-- PANEL 2: AUTO-CUTTER UNIVERSAL (TANPA BRIEF / PAKAI BRIEF / AI) -->
     <section class="card">
       <div class="row-between">
-        <h2>3. Cutter Otomatis (Brief / AI)</h2>
-        <button type="button" id="btnLoadDemo" class="chip-btn">✨ Isi Contoh Brief</button>
+        <h2>2. Cutter Otomatis</h2>
+        <select id="nicheSelect" class="compact-select">
+          <option value="general">Kategori: Umum / Viral</option>
+          <option value="automotive">Kategori: Otomotif</option>
+          <option value="product">Kategori: Review / Skincare</option>
+          <option value="gaming">Kategori: Gaming / Aksi</option>
+          <option value="podcast">Kategori: Podcast / Obrolan</option>
+        </select>
       </div>
 
-      <label class="lbl" for="rawBriefInput">Tempel Briefing Campaign</label>
-      <textarea id="rawBriefInput" rows="3" placeholder="Tempel briefing di sini untuk ekstraksi aturan otomatis..."></textarea>
-
-      <div class="grid-2 mt-8">
+      <div class="grid-2">
         <div>
-          <label class="lbl">Produk / Topik Wajib</label>
-          <input type="text" id="briefBrand" placeholder="Nama produk / kata kunci" />
-        </div>
-        <div>
-          <label class="lbl">Judul Hook (0-3 Detik)</label>
-          <input type="text" id="briefHook" placeholder="TOP 3 MOMEN PALING SERU" />
-        </div>
-        <div>
-          <label class="lbl">Durasi Min (detik)</label>
+          <label class="lbl">Target Durasi Min (detik)</label>
           <input type="number" id="briefMinDur" value="30" />
         </div>
         <div>
-          <label class="lbl">Durasi Maks (detik)</label>
-          <input type="number" id="briefMaxDur" value="90" />
+          <label class="lbl">Target Durasi Maks (detik)</label>
+          <input type="number" id="briefMaxDur" value="60" />
+        </div>
+        <div>
+          <label class="lbl">Teks Hook Pembuka (0-3d)</label>
+          <input type="text" id="briefHook" placeholder="Opsional: Judul di atas video" />
+        </div>
+        <div>
+          <label class="lbl">Teks CTA Akhir</label>
+          <input type="text" id="briefCta" placeholder="Opsional: Ajakan di akhir" />
         </div>
       </div>
 
-      <label class="lbl">Teks CTA Akhir</label>
-      <input type="text" id="briefCta" placeholder="Cek selengkapnya di keranjang / official store" />
-
-      <label class="lbl">Hashtag Wajib</label>
-      <input type="text" id="briefHashtags" placeholder="#podcast #klip #fyp" />
-
       <details class="ai-drawer">
-        <summary>🤖 Opsional: Gemini API Key (Mode AI Cerdas)</summary>
-        <input type="password" id="geminiKey" placeholder="Tempel AIzaSy... (kosongkan untuk mode offline otomatis)" />
+        <summary>📋 Opsional: Tempel Briefing / Transkrip / API Key AI</summary>
+        <label class="lbl">Kata Kunci / Produk Wajib</label>
+        <input type="text" id="briefBrand" placeholder="Contoh: nama produk atau topik" />
+
+        <label class="lbl">Teks Briefing Campaign (Otomatis Ekstrak Aturan)</label>
+        <textarea id="rawBriefInput" rows="3" placeholder="Tempel briefing di sini jika ada..."></textarea>
+
+        <label class="lbl">Transkrip / Subtitle Timestamp (Kosongkan untuk Auto-Scan Video)</label>
+        <textarea id="transcriptInput" rows="3" placeholder="Kosongkan saja jika video tidak punya subtitle — cutter akan otomatis memindai momen video!"></textarea>
+
+        <label class="lbl">Gemini API Key (Opsional)</label>
+        <input type="password" id="geminiKey" placeholder="AIzaSy... (kosongkan untuk mode offline gratis)" />
       </details>
 
       <button type="button" id="btnAutoCut" class="btn accent full mt-10">
-        ✂️ Potong & Cari Momen Otomatis
+        ✂️ Potong Momen Otomatis Sekarang
       </button>
       <p id="cutStatus" class="note highlight"></p>
     </section>
 
-    <!-- PANEL 4: TIMELINE HASIL POTONGAN -->
+    <!-- PANEL 3: DAFTAR HASIL POTONGAN -->
     <section class="card">
-      <h2>4. Daftar Potongan Momen (Cutter Timeline)</h2>
+      <h2>3. Daftar Potongan Momen</h2>
       <div id="clipsContainer" class="clips-list">
-        <p class="note">Hasil potongan momen otomatis akan muncul di sini.</p>
+        <p class="note">Masukkan video lalu tekan "Potong Momen Otomatis Sekarang".</p>
       </div>
     </section>
 
-    <!-- PANEL 5: CAPTION SIAP SALIN -->
+    <!-- PANEL 4: CAPTION & HASHTAG -->
     <section class="card">
-      <h2>5. Caption & Hashtag</h2>
-      <textarea id="captionOutput" rows="3" placeholder="Caption otomatis..."></textarea>
+      <h2>4. Caption Siap Unggah</h2>
+      <textarea id="captionOutput" rows="3" placeholder="Caption otomatis akan dibuat di sini..."></textarea>
       <button type="button" id="btnCopyCaption" class="btn primary full mt-8">📋 Salin Caption</button>
     </section>
   </main>
 
-  <!-- Hidden source video & offscreen tracking canvas -->
-  <video id="sourceVideo" playsinline muted crossorigin="anonymous" hidden></video>
+  <!-- PENTING: Jangan pakai atribut 'hidden' agar decoder video Android WebView tetap aktif -->
+  <video id="sourceVideo" playsinline preload="auto"></video>
 
   <script src="script.js"></script>
 </body>
-  </html>
-          
+          </html>
+  
