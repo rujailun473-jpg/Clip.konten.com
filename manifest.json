@@ -1,0 +1,9 @@
+{
+  "name": "AutoClipper Studio",
+  "short_name": "AutoClipper",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0b0e14",
+  "theme_color": "#0b0e14",
+  "orientation": "portrait"
+}
