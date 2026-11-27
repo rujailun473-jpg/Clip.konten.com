@@ -1,5 +1,5 @@
 // =========================================================================
-// AUTOCLIPPER UNIVERSAL — NATIVE VIDEO STAGE + AUTO-TRACK + AUTO-CUT
+// AUTOCLIPPER UNIVERSAL — SINGLE DECODER ANDROID WEBVIEW SAFE
 // =========================================================================
 
 const FRAME_DIMS = {
@@ -20,19 +20,13 @@ const NICHE_PRESETS = {
 
 const state = {
   videoUrl: null,
-  currentFile: null,
-  usedFallbackDataUrl: false,
   aspectRatio: "9:16",
-  layoutMode: "single",
   autoTrack: true,
   manualX1: 0.5,
-  manualX2: 0.75,
   targetX1: 0.5,
   targetY1: 0.45,
   smoothX1: 0.5,
   smoothY1: 0.45,
-  targetX2: 0.75,
-  smoothX2: 0.75,
   clips: [],
   activeClipIndex: -1,
   isPlayingSequence: false,
@@ -40,12 +34,11 @@ const state = {
 
 const dom = {
   videoInput: document.getElementById("videoInput"),
+  btnTestSample: document.getElementById("btnTestSample"),
   srtInput: document.getElementById("srtInput"),
   videoStatus: document.getElementById("videoStatus"),
   frameStage: document.getElementById("frameStage"),
   mainVideo: document.getElementById("mainVideo"),
-  bgBlurVideo: document.getElementById("bgBlurVideo"),
-  splitBottomVideo: document.getElementById("splitBottomVideo"),
   hookOverlay: document.getElementById("hookOverlay"),
   subOverlay: document.getElementById("subOverlay"),
   ctaOverlay: document.getElementById("ctaOverlay"),
@@ -53,14 +46,8 @@ const dom = {
   layoutModeSelect: document.getElementById("layoutModeSelect"),
   faceTrackToggle: document.getElementById("faceTrackToggle"),
   trackStatusBadge: document.getElementById("trackStatusBadge"),
-  btnTogglePlay: document.getElementById("btnTogglePlay"),
-  videoSeekBar: document.getElementById("videoSeekBar"),
-  timeDisplay: document.getElementById("timeDisplay"),
   manualX1: document.getElementById("manualX1"),
   manualX1Val: document.getElementById("manualX1Val"),
-  manualX2: document.getElementById("manualX2"),
-  manualX2Val: document.getElementById("manualX2Val"),
-  splitControlGroup: document.getElementById("splitControlGroup"),
   nicheSelect: document.getElementById("nicheSelect"),
   briefMinDur: document.getElementById("briefMinDur"),
   briefMaxDur: document.getElementById("briefMaxDur"),
@@ -82,7 +69,6 @@ const dom = {
   btnCopyCaption: document.getElementById("btnCopyCaption"),
 };
 
-// Offscreen micro-canvas (64x36) untuk tracking wajah hemat RAM 4GB
 const trackCanvas = document.createElement("canvas");
 trackCanvas.width = 64;
 trackCanvas.height = 36;
@@ -91,7 +77,7 @@ const trackCtx = trackCanvas.getContext("2d", { willReadFrequently: true });
 let nativeFaceDetector = null;
 if ("FaceDetector" in window) {
   try {
-    nativeFaceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 2 });
+    nativeFaceDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 1 });
   } catch (_) {
     nativeFaceDetector = null;
   }
@@ -105,21 +91,18 @@ dom.geminiKey.addEventListener("change", () => {
 });
 
 // =========================================================================
-// 1. MEMUAT VIDEO + DIAGNOSTIK & FALLBACK DATA-URL ANDROID
+// 1. MEMUAT VIDEO DARI HP & TOMBOL TES VIDEO BAWAAN
 // =========================================================================
 dom.videoInput.addEventListener("change", (e) => {
   const file = e.target.files && e.target.files[0];
   if (!file) {
-    dom.videoStatus.textContent = "⚠️ Tidak ada file video yang diterima dari galeri.";
+    dom.videoStatus.textContent = "⚠️ Pemilihan video dibatalkan atau file tidak terbaca.";
     return;
   }
 
-  state.currentFile = file;
-  state.usedFallbackDataUrl = false;
   const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
-
   if (file.size === 0) {
-    dom.videoStatus.textContent = "❌ Ukuran file terbaca 0 MB. Coba pilih video lewat menu 'File Saya / Documents'.";
+    dom.videoStatus.textContent = "❌ File terbaca 0 MB. Saat memilih file, ketuk menu garis tiga (☰) lalu pilih 'File Saya / Pengelola File', bukan Google Photos.";
     return;
   }
 
@@ -128,60 +111,68 @@ dom.videoInput.addEventListener("change", (e) => {
   }
 
   state.videoUrl = URL.createObjectURL(file);
-  dom.videoStatus.textContent = `⏳ Membuka "${file.name}" (${sizeMB} MB)...`;
-  applyVideoSource(state.videoUrl);
+  dom.videoStatus.textContent = `⏳ Membuka "${file.name}" (${sizeMB} MB | ${file.type || "video"})...`;
 
-  // Watchdog 2.5 detik: jika WebView Android menolak blob:, otomatis pakai DataURL (untuk file < 55MB)
-  setTimeout(() => {
-    if (dom.mainVideo.readyState === 0 && !state.usedFallbackDataUrl && file.size < 55 * 1024 * 1024) {
-      fallbackToDataUrl(file);
-    }
-  }, 2500);
+  dom.mainVideo.src = state.videoUrl;
+  dom.mainVideo.load();
 });
 
-function applyVideoSource(srcUrl) {
-  dom.mainVideo.src = srcUrl;
-  dom.bgBlurVideo.src = srcUrl;
-  dom.splitBottomVideo.src = srcUrl;
-  dom.mainVideo.load();
-  dom.bgBlurVideo.load();
-  dom.splitBottomVideo.load();
-}
+// Tombol Tes Video Bawaan (Generate klip 6 detik langsung di HP tanpa galeri)
+dom.btnTestSample.addEventListener("click", () => {
+  dom.videoStatus.textContent = "⏳ Membuat video tes 6 detik...";
+  const c = document.createElement("canvas");
+  c.width = 360;
+  c.height = 640;
+  const g = c.getContext("2d");
 
-function fallbackToDataUrl(file) {
-  state.usedFallbackDataUrl = true;
-  dom.videoStatus.textContent = "🔄 Mengonversi stream untuk WebView Android...";
-  const reader = new FileReader();
-  reader.onload = (ev) => {
-    applyVideoSource(ev.target.result);
+  const stream = c.captureStream(24);
+  const rec = new MediaRecorder(stream);
+  const chunks = [];
+  rec.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  rec.onstop = () => {
+    const blob = new Blob(chunks, { type: "video/webm" });
+    if (state.videoUrl) URL.revokeObjectURL(state.videoUrl);
+    state.videoUrl = URL.createObjectURL(blob);
+    dom.mainVideo.src = state.videoUrl;
+    dom.mainVideo.load();
+    dom.videoStatus.textContent = "✅ Video Tes Bawaan siap! Tekan Play pada layar video.";
   };
-  reader.onerror = () => {
-    dom.videoStatus.textContent = "❌ Gagal membaca file video dari penyimpanan HP.";
-  };
-  reader.readAsDataURL(file);
-}
+
+  rec.start();
+  let frame = 0;
+  const anim = setInterval(() => {
+    frame++;
+    g.fillStyle = "#1e293b";
+    g.fillRect(0, 0, 360, 640);
+    const x = 180 + Math.sin(frame * 0.1) * 90;
+    g.fillStyle = "#f59e0b";
+    g.beginPath();
+    g.arc(x, 260, 48, 0, Math.PI * 2);
+    g.fill();
+    g.fillStyle = "#ffffff";
+    g.font = "bold 20px system-ui";
+    g.textAlign = "center";
+    g.fillText("LAYAR VIDEO AKTIF", 180, 360);
+    g.fillText(`Detik ${(frame / 24).toFixed(1)}s`, 180, 395);
+
+    if (frame >= 96) {
+      clearInterval(anim);
+      rec.stop();
+    }
+  }, 42);
+});
 
 dom.mainVideo.addEventListener("loadedmetadata", () => {
   const vw = dom.mainVideo.videoWidth;
   const vh = dom.mainVideo.videoHeight;
   const dur = dom.mainVideo.duration || 0;
-
-  dom.videoSeekBar.max = Math.max(1, dur);
-  dom.timeDisplay.textContent = `00:00 / ${formatTime(dur)}`;
-  dom.videoStatus.textContent = `✅ Video Aktif: ${vw}×${vh} • Durasi ${formatTime(dur)}`;
-
-  // Lompat ke 0.1 detik agar thumbnail frame langsung muncul di layar
+  dom.videoStatus.textContent = `✅ Video Siap (${vw}×${vh} • ${formatTime(dur)})`;
   dom.mainVideo.currentTime = Math.min(0.1, dur * 0.05);
-  dom.splitBottomVideo.currentTime = dom.mainVideo.currentTime;
 });
 
 dom.mainVideo.addEventListener("error", () => {
-  const errCode = dom.mainVideo.error ? dom.mainVideo.error.code : 0;
-  if (!state.usedFallbackDataUrl && state.currentFile && state.currentFile.size < 55 * 1024 * 1024) {
-    fallbackToDataUrl(state.currentFile);
-  } else {
-    dom.videoStatus.textContent = `❌ Video tidak bisa diputar (Kode Error: ${errCode}). Pastikan format MP4 H.264.`;
-  }
+  const code = dom.mainVideo.error ? dom.mainVideo.error.code : "unknown";
+  dom.videoStatus.textContent = `❌ Decoder Android gagal memutar file ini (Kode: ${code}). Coba video MP4 lain dari folder Download/Camera.`;
 });
 
 dom.srtInput.addEventListener("change", async (e) => {
@@ -192,61 +183,17 @@ dom.srtInput.addEventListener("change", async (e) => {
 });
 
 // =========================================================================
-// 2. KONTROL PEMUTAR & SINKRONISASI 3 LAYER VIDEO
-// =========================================================================
-dom.btnTogglePlay.addEventListener("click", () => {
-  if (!dom.mainVideo.src) return;
-  if (dom.mainVideo.paused) {
-    playSyncedVideos();
-  } else {
-    pauseSyncedVideos();
-  }
-});
-
-function playSyncedVideos() {
-  dom.mainVideo.play();
-  if (state.layoutMode === "fit") dom.bgBlurVideo.play().catch(() => {});
-  if (state.layoutMode === "split") {
-    dom.splitBottomVideo.currentTime = dom.mainVideo.currentTime;
-    dom.splitBottomVideo.play().catch(() => {});
-  }
-  dom.btnTogglePlay.textContent = "⏸️ Pause";
-}
-
-function pauseSyncedVideos() {
-  dom.mainVideo.pause();
-  dom.bgBlurVideo.pause();
-  dom.splitBottomVideo.pause();
-  dom.btnTogglePlay.textContent = "▶️ Play";
-}
-
-dom.videoSeekBar.addEventListener("input", (e) => {
-  if (!dom.mainVideo.src) return;
-  const t = Number(e.target.value);
-  dom.mainVideo.currentTime = t;
-  dom.bgBlurVideo.currentTime = t;
-  dom.splitBottomVideo.currentTime = t;
-});
-
-// =========================================================================
-// 3. PENGATURAN BINGKAI & AUTO FACE-TRACKING
+// 2. PENGATURAN BINGKAI & AUTO FACE-TRACKING
 // =========================================================================
 dom.aspectRatioSelect.addEventListener("change", (e) => {
   state.aspectRatio = e.target.value;
-  updateStageClasses();
+  const ratioCls = FRAME_DIMS[state.aspectRatio]?.cls || "ratio-9-16";
+  dom.frameStage.className = `frame-stage ${ratioCls}`;
 });
 
 dom.layoutModeSelect.addEventListener("change", (e) => {
-  state.layoutMode = e.target.value;
-  dom.splitControlGroup.classList.toggle("hidden", state.layoutMode !== "split");
-  updateStageClasses();
-  if (!dom.mainVideo.paused) playSyncedVideos();
+  dom.mainVideo.style.objectFit = e.target.value;
 });
-
-function updateStageClasses() {
-  const ratioCls = FRAME_DIMS[state.aspectRatio]?.cls || "ratio-9-16";
-  dom.frameStage.className = `frame-stage ${ratioCls} mode-${state.layoutMode}`;
-}
 
 dom.faceTrackToggle.addEventListener("change", (e) => {
   state.autoTrack = e.target.checked;
@@ -254,7 +201,6 @@ dom.faceTrackToggle.addEventListener("change", (e) => {
   dom.trackStatusBadge.className = state.autoTrack ? "pill ok" : "pill warn";
   if (!state.autoTrack) {
     state.targetX1 = state.manualX1;
-    state.targetX2 = state.manualX2;
   }
 });
 
@@ -265,25 +211,14 @@ dom.manualX1.addEventListener("input", (e) => {
   if (!state.autoTrack) {
     state.targetX1 = state.manualX1;
     state.smoothX1 = state.manualX1;
-    applyCameraPosition();
-  }
-});
-
-dom.manualX2.addEventListener("input", (e) => {
-  const pct = Number(e.target.value);
-  dom.manualX2Val.textContent = `${pct}%`;
-  state.manualX2 = pct / 100;
-  if (!state.autoTrack) {
-    state.targetX2 = state.manualX2;
-    state.smoothX2 = state.manualX2;
-    applyCameraPosition();
+    dom.mainVideo.style.objectPosition = `${pct}% 45%`;
   }
 });
 
 let lastTrackTick = 0;
 
 async function trackSubjectLoop(now) {
-  if (state.autoTrack && !dom.mainVideo.paused && dom.mainVideo.readyState >= 2 && now - lastTrackTick > 220) {
+  if (state.autoTrack && !dom.mainVideo.paused && dom.mainVideo.readyState >= 2 && now - lastTrackTick > 250) {
     lastTrackTick = now;
     const vw = dom.mainVideo.videoWidth;
     const vh = dom.mainVideo.videoHeight;
@@ -294,14 +229,9 @@ async function trackSubjectLoop(now) {
         try {
           const faces = await nativeFaceDetector.detect(dom.mainVideo);
           if (faces && faces.length > 0) {
-            faces.sort((a, b) => a.boundingBox.x - b.boundingBox.x);
             const f1 = faces[0].boundingBox;
             state.targetX1 = clamp((f1.x + f1.width * 0.5) / vw, 0.12, 0.88);
             state.targetY1 = clamp((f1.y + f1.height * 0.45) / vh, 0.2, 0.8);
-            if (faces.length > 1) {
-              const f2 = faces[faces.length - 1].boundingBox;
-              state.targetX2 = clamp((f2.x + f2.width * 0.5) / vw, 0.12, 0.88);
-            }
             detected = true;
           }
         } catch (_) {}
@@ -311,47 +241,31 @@ async function trackSubjectLoop(now) {
         try {
           trackCtx.drawImage(dom.mainVideo, 0, 0, 64, 36);
           const data = trackCtx.getImageData(0, 0, 64, 36).data;
-          let wL = 0, xL = 0, wR = 0, xR = 0, wT = 0, xT = 0, yT = 0;
+          let wT = 0, xT = 0, yT = 0;
 
           for (let y = 3; y < 30; y++) {
             for (let x = 2; x < 62; x++) {
               const i = (y * 64 + x) * 4;
               const r = data[i], g = data[i + 1], b = data[i + 2];
               if (r > 75 && g > 40 && b > 25 && r > g && r > b && Math.abs(r - g) > 12) {
-                const nx = x / 64;
-                const ny = y / 36;
-                wT++; xT += nx; yT += ny;
-                if (nx < 0.5) { wL++; xL += nx; } else { wR++; xR += nx; }
+                wT++;
+                xT += x / 64;
+                yT += y / 36;
               }
             }
           }
-
           if (wT > 6) {
-            if (state.layoutMode === "split" && wL > 3 && wR > 3) {
-              state.targetX1 = clamp(xL / wL, 0.12, 0.48);
-              state.targetX2 = clamp(xR / wR, 0.52, 0.88);
-            } else {
-              state.targetX1 = clamp(xT / wT, 0.15, 0.85);
-              state.targetY1 = clamp(yT / wT, 0.2, 0.8);
-            }
+            state.targetX1 = clamp(xT / wT, 0.15, 0.85);
+            state.targetY1 = clamp(yT / wT, 0.2, 0.8);
           }
         } catch (_) {}
       }
     }
   }
 
-  // Smooth gimbal movement
   state.smoothX1 += (state.targetX1 - state.smoothX1) * 0.15;
   state.smoothY1 += (state.targetY1 - state.smoothY1) * 0.15;
-  state.smoothX2 += (state.targetX2 - state.smoothX2) * 0.15;
-  applyCameraPosition();
-
-  if (!dom.mainVideo.paused && dom.mainVideo.readyState >= 2) {
-    const cur = dom.mainVideo.currentTime || 0;
-    const dur = dom.mainVideo.duration || 0;
-    dom.videoSeekBar.value = cur;
-    dom.timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
-  }
+  dom.mainVideo.style.objectPosition = `${(state.smoothX1 * 100).toFixed(1)}% ${(state.smoothY1 * 100).toFixed(1)}%`;
 
   if (state.isPlayingSequence && state.activeClipIndex >= 0) {
     const activeClip = state.clips[state.activeClipIndex];
@@ -363,11 +277,6 @@ async function trackSubjectLoop(now) {
   requestAnimationFrame(trackSubjectLoop);
 }
 
-function applyCameraPosition() {
-  dom.mainVideo.style.objectPosition = `${(state.smoothX1 * 100).toFixed(1)}% ${(state.smoothY1 * 100).toFixed(1)}%`;
-  dom.splitBottomVideo.style.objectPosition = `${(state.smoothX2 * 100).toFixed(1)}% 45%`;
-}
-
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
@@ -375,7 +284,7 @@ function clamp(v, min, max) {
 requestAnimationFrame(trackSubjectLoop);
 
 // =========================================================================
-// 4. CUTTER OTOMATIS UNIVERSAL
+// 3. CUTTER OTOMATIS UNIVERSAL
 // =========================================================================
 dom.btnAutoCut.addEventListener("click", async () => {
   const videoDur = dom.mainVideo.duration || 0;
@@ -383,7 +292,7 @@ dom.btnAutoCut.addEventListener("click", async () => {
   const niche = NICHE_PRESETS[dom.nicheSelect.value] || NICHE_PRESETS.general;
 
   if (!videoDur && !rawTranscript) {
-    alert("Masukkan video terlebih dahulu agar cutter bisa memotong momen!");
+    alert("Pilih video terlebih dahulu agar cutter bisa memotong momen!");
     return;
   }
 
@@ -423,8 +332,8 @@ dom.btnAutoCut.addEventListener("click", async () => {
 });
 
 function cutVideoTimelineAutomatically(totalVideoDur, config) {
-  const safeDur = Math.max(6, totalVideoDur);
-  const targetTotal = clamp(Math.round((config.minDur + config.maxDur) / 2), 10, Math.floor(safeDur));
+  const safeDur = Math.max(4, totalVideoDur);
+  const targetTotal = clamp(Math.round((config.minDur + config.maxDur) / 2), 6, Math.floor(safeDur));
 
   if (safeDur <= config.maxDur) {
     const cuts = [];
@@ -536,4 +445,91 @@ Balas JSON array murni: [{"role":"...","type":"hook|moment|product|cta","start":
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
-    
+        generationConfig: { responseMimeType: "application/json" },
+      }),
+    }
+  );
+  const data = await res.json();
+  return JSON.parse(data.candidates[0].content.parts[0].text);
+}
+
+// =========================================================================
+// 4. TIMELINE, PEMUTAR BERURUTAN & SIMPAN VIDEO
+// =========================================================================
+function renderClipTimeline(config) {
+  dom.clipsContainer.innerHTML = "";
+  let totalSec = 0;
+
+  state.clips.forEach((clip, idx) => {
+    const dur = Math.max(1, Math.round(clip.end - clip.start));
+    if (clip.type !== "cta") totalSec += dur;
+
+    const card = document.createElement("div");
+    card.className = `clip-card role-${clip.type}`;
+    card.innerHTML = `
+      <div class="clip-top">
+        <span class="clip-title">${clip.role}</span>
+        <span class="clip-badge">${formatTime(clip.start)} - ${formatTime(clip.end)} (${dur}d)</span>
+      </div>
+      <p class="clip-text">${clip.text}</p>
+      <div class="clip-actions">
+        <button type="button" class="mini-btn" onclick="playSingleClip(${idx})">▶️ Cek</button>
+        <input type="number" value="${Math.floor(clip.start)}" onchange="editClipRange(${idx}, 'start', this.value)" />
+        <input type="number" value="${Math.ceil(clip.end)}" onchange="editClipRange(${idx}, 'end', this.value)" />
+      </div>
+    `;
+    dom.clipsContainer.appendChild(card);
+  });
+
+  dom.totalDurBadge.textContent = `Total: ${totalSec}d`;
+  dom.totalDurBadge.className =
+    totalSec >= config.minDur && totalSec <= config.maxDur ? "pill ok" : "pill warn";
+
+  const extraTags = (dom.rawBriefInput.value.match(/#[A-Za-z0-9_]+/g) || []).join(" ");
+  dom.captionOutput.value = `${config.hook}\n\nGimana menurut kalian? Tulis di kolom komentar! 👇\n\n${extraTags || config.tags}`;
+}
+
+window.editClipRange = function (idx, field, val) {
+  state.clips[idx][field] = Number(val);
+  const niche = NICHE_PRESETS[dom.nicheSelect.value] || NICHE_PRESETS.general;
+  renderClipTimeline({
+    hook: dom.briefHook.value.trim() || niche.hook,
+    minDur: Number(dom.briefMinDur.value) || 30,
+    maxDur: Number(dom.briefMaxDur.value) || 60,
+    tags: niche.tags,
+  });
+};
+
+window.playSingleClip = function (idx) {
+  state.isPlayingSequence = false;
+  state.activeClipIndex = idx;
+  applyClipVisuals(state.clips[idx]);
+  if (dom.mainVideo.src) {
+    dom.mainVideo.currentTime = state.clips[idx].start;
+    dom.mainVideo.play();
+  }
+};
+
+function applyClipVisuals(clip) {
+  dom.hookOverlay.classList.toggle("hidden", clip.type !== "hook");
+  dom.hookOverlay.textContent = clip.text;
+
+  dom.ctaOverlay.classList.toggle("hidden", clip.type !== "cta");
+  dom.ctaOverlay.textContent = clip.text;
+
+  const showSub = dom.transcriptInput.value.trim() && (clip.type === "moment" || clip.type === "product");
+  dom.subOverlay.classList.toggle("hidden", !showSub);
+  dom.subOverlay.textContent = clip.text;
+}
+
+dom.btnPlayAll.addEventListener("click", () => {
+  if (state.clips.length === 0) {
+    alert("Tekan 'Potong Momen Otomatis Sekarang' terlebih dahulu.");
+    return;
+  }
+  state.isPlayingSequence = true;
+  startClipAt(0);
+});
+
+dom.btnStopAll.addEventListener("click", () => {
+  state.isPlayingSequence = 
