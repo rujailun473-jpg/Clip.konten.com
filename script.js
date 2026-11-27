@@ -1,13 +1,13 @@
 // =========================================================================
-// AUTOCLIPPER UNIVERSAL — ANDROID WEBVIEW SAFE ENGINE
+// AUTOCLIPPER UNIVERSAL — NATIVE VIDEO STAGE + AUTO-TRACK + AUTO-CUT
 // =========================================================================
 
-const FRAME_PRESETS = {
-  "9:16": { w: 540, h: 960 },
-  "9:14": { w: 540, h: 840 },
-  "4:5":  { w: 540, h: 675 },
-  "1:1":  { w: 540, h: 540 },
-  "16:9": { w: 960, h: 540 },
+const FRAME_DIMS = {
+  "9:16": { w: 540, h: 960, cls: "ratio-9-16" },
+  "9:14": { w: 540, h: 840, cls: "ratio-9-14" },
+  "4:5":  { w: 540, h: 675, cls: "ratio-4-5" },
+  "1:1":  { w: 540, h: 540, cls: "ratio-1-1" },
+  "16:9": { w: 960, h: 540, cls: "ratio-16-9" },
 };
 
 const NICHE_PRESETS = {
@@ -20,6 +20,8 @@ const NICHE_PRESETS = {
 
 const state = {
   videoUrl: null,
+  currentFile: null,
+  usedFallbackDataUrl: false,
   aspectRatio: "9:16",
   layoutMode: "single",
   autoTrack: true,
@@ -34,17 +36,19 @@ const state = {
   clips: [],
   activeClipIndex: -1,
   isPlayingSequence: false,
-  overlayHook: "",
-  overlaySub: "",
-  overlayCta: "",
 };
 
 const dom = {
   videoInput: document.getElementById("videoInput"),
   srtInput: document.getElementById("srtInput"),
   videoStatus: document.getElementById("videoStatus"),
-  sourceVideo: document.getElementById("sourceVideo"),
-  stageCanvas: document.getElementById("stageCanvas"),
+  frameStage: document.getElementById("frameStage"),
+  mainVideo: document.getElementById("mainVideo"),
+  bgBlurVideo: document.getElementById("bgBlurVideo"),
+  splitBottomVideo: document.getElementById("splitBottomVideo"),
+  hookOverlay: document.getElementById("hookOverlay"),
+  subOverlay: document.getElementById("subOverlay"),
+  ctaOverlay: document.getElementById("ctaOverlay"),
   aspectRatioSelect: document.getElementById("aspectRatioSelect"),
   layoutModeSelect: document.getElementById("layoutModeSelect"),
   faceTrackToggle: document.getElementById("faceTrackToggle"),
@@ -78,9 +82,7 @@ const dom = {
   btnCopyCaption: document.getElementById("btnCopyCaption"),
 };
 
-const ctx = dom.stageCanvas.getContext("2d", { alpha: false });
-
-// Micro-canvas 64x36 untuk deteksi wajah & objek ringan (RAM 4GB safe)
+// Offscreen micro-canvas (64x36) untuk tracking wajah hemat RAM 4GB
 const trackCanvas = document.createElement("canvas");
 trackCanvas.width = 64;
 trackCanvas.height = 36;
@@ -103,85 +105,148 @@ dom.geminiKey.addEventListener("change", () => {
 });
 
 // =========================================================================
-// 1. MEMUAT VIDEO LOKAL (PERBAIKAN ANDROID WEBVIEW / APK)
+// 1. MEMUAT VIDEO + DIAGNOSTIK & FALLBACK DATA-URL ANDROID
 // =========================================================================
 dom.videoInput.addEventListener("change", (e) => {
-  const file = e.target.files[0];
-  if (!file) return;
+  const file = e.target.files && e.target.files[0];
+  if (!file) {
+    dom.videoStatus.textContent = "⚠️ Tidak ada file video yang diterima dari galeri.";
+    return;
+  }
+
+  state.currentFile = file;
+  state.usedFallbackDataUrl = false;
+  const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+
+  if (file.size === 0) {
+    dom.videoStatus.textContent = "❌ Ukuran file terbaca 0 MB. Coba pilih video lewat menu 'File Saya / Documents'.";
+    return;
+  }
 
   if (state.videoUrl) {
     URL.revokeObjectURL(state.videoUrl);
   }
 
   state.videoUrl = URL.createObjectURL(file);
-  dom.sourceVideo.src = state.videoUrl;
-  dom.sourceVideo.load();
-  dom.videoStatus.textContent = `⏳ Memuat "${file.name}"...`;
+  dom.videoStatus.textContent = `⏳ Membuka "${file.name}" (${sizeMB} MB)...`;
+  applyVideoSource(state.videoUrl);
+
+  // Watchdog 2.5 detik: jika WebView Android menolak blob:, otomatis pakai DataURL (untuk file < 55MB)
+  setTimeout(() => {
+    if (dom.mainVideo.readyState === 0 && !state.usedFallbackDataUrl && file.size < 55 * 1024 * 1024) {
+      fallbackToDataUrl(file);
+    }
+  }, 2500);
 });
 
-dom.sourceVideo.addEventListener("loadedmetadata", () => {
-  const vw = dom.sourceVideo.videoWidth;
-  const vh = dom.sourceVideo.videoHeight;
-  const dur = dom.sourceVideo.duration || 0;
+function applyVideoSource(srcUrl) {
+  dom.mainVideo.src = srcUrl;
+  dom.bgBlurVideo.src = srcUrl;
+  dom.splitBottomVideo.src = srcUrl;
+  dom.mainVideo.load();
+  dom.bgBlurVideo.load();
+  dom.splitBottomVideo.load();
+}
+
+function fallbackToDataUrl(file) {
+  state.usedFallbackDataUrl = true;
+  dom.videoStatus.textContent = "🔄 Mengonversi stream untuk WebView Android...";
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    applyVideoSource(ev.target.result);
+  };
+  reader.onerror = () => {
+    dom.videoStatus.textContent = "❌ Gagal membaca file video dari penyimpanan HP.";
+  };
+  reader.readAsDataURL(file);
+}
+
+dom.mainVideo.addEventListener("loadedmetadata", () => {
+  const vw = dom.mainVideo.videoWidth;
+  const vh = dom.mainVideo.videoHeight;
+  const dur = dom.mainVideo.duration || 0;
 
   dom.videoSeekBar.max = Math.max(1, dur);
   dom.timeDisplay.textContent = `00:00 / ${formatTime(dur)}`;
-  dom.videoStatus.textContent = `✅ Video siap (${vw}×${vh} • ${formatTime(dur)})`;
+  dom.videoStatus.textContent = `✅ Video Aktif: ${vw}×${vh} • Durasi ${formatTime(dur)}`;
 
-  // Pancing frame pertama agar langsung tampil di kanvas meski sedang pause
-  dom.sourceVideo.currentTime = Math.min(0.2, dur * 0.1);
+  // Lompat ke 0.1 detik agar thumbnail frame langsung muncul di layar
+  dom.mainVideo.currentTime = Math.min(0.1, dur * 0.05);
+  dom.splitBottomVideo.currentTime = dom.mainVideo.currentTime;
 });
 
-dom.sourceVideo.addEventListener("seeked", () => {
-  drawFrameOnce();
-});
-
-dom.sourceVideo.addEventListener("loadeddata", () => {
-  drawFrameOnce();
-});
-
-dom.sourceVideo.addEventListener("error", () => {
-  dom.videoStatus.textContent = "❌ Format video tidak didukung WebView Android. Gunakan MP4 (H.264).";
+dom.mainVideo.addEventListener("error", () => {
+  const errCode = dom.mainVideo.error ? dom.mainVideo.error.code : 0;
+  if (!state.usedFallbackDataUrl && state.currentFile && state.currentFile.size < 55 * 1024 * 1024) {
+    fallbackToDataUrl(state.currentFile);
+  } else {
+    dom.videoStatus.textContent = `❌ Video tidak bisa diputar (Kode Error: ${errCode}). Pastikan format MP4 H.264.`;
+  }
 });
 
 dom.srtInput.addEventListener("change", async (e) => {
   const file = e.target.files[0];
   if (!file) return;
   dom.transcriptInput.value = await file.text();
-  dom.cutStatus.textContent = `📄 Subtitle "${file.name}" berhasil dimuat.`;
+  dom.cutStatus.textContent = `📄 Subtitle "${file.name}" dimuat.`;
 });
 
-// Kontrol Play/Pause & Seekbar
+// =========================================================================
+// 2. KONTROL PEMUTAR & SINKRONISASI 3 LAYER VIDEO
+// =========================================================================
 dom.btnTogglePlay.addEventListener("click", () => {
-  if (!dom.sourceVideo.src) return;
-  if (dom.sourceVideo.paused) {
-    dom.sourceVideo.play();
+  if (!dom.mainVideo.src) return;
+  if (dom.mainVideo.paused) {
+    playSyncedVideos();
   } else {
-    dom.sourceVideo.pause();
+    pauseSyncedVideos();
   }
 });
 
+function playSyncedVideos() {
+  dom.mainVideo.play();
+  if (state.layoutMode === "fit") dom.bgBlurVideo.play().catch(() => {});
+  if (state.layoutMode === "split") {
+    dom.splitBottomVideo.currentTime = dom.mainVideo.currentTime;
+    dom.splitBottomVideo.play().catch(() => {});
+  }
+  dom.btnTogglePlay.textContent = "⏸️ Pause";
+}
+
+function pauseSyncedVideos() {
+  dom.mainVideo.pause();
+  dom.bgBlurVideo.pause();
+  dom.splitBottomVideo.pause();
+  dom.btnTogglePlay.textContent = "▶️ Play";
+}
+
 dom.videoSeekBar.addEventListener("input", (e) => {
-  if (!dom.sourceVideo.src) return;
-  dom.sourceVideo.currentTime = Number(e.target.value);
+  if (!dom.mainVideo.src) return;
+  const t = Number(e.target.value);
+  dom.mainVideo.currentTime = t;
+  dom.bgBlurVideo.currentTime = t;
+  dom.splitBottomVideo.currentTime = t;
 });
 
 // =========================================================================
-// 2. PENGATURAN BINGKAI, MODE & AUTO-TRACK
+// 3. PENGATURAN BINGKAI & AUTO FACE-TRACKING
 // =========================================================================
 dom.aspectRatioSelect.addEventListener("change", (e) => {
   state.aspectRatio = e.target.value;
-  const p = FRAME_PRESETS[state.aspectRatio] || FRAME_PRESETS["9:16"];
-  dom.stageCanvas.width = p.w;
-  dom.stageCanvas.height = p.h;
-  drawFrameOnce();
+  updateStageClasses();
 });
 
 dom.layoutModeSelect.addEventListener("change", (e) => {
   state.layoutMode = e.target.value;
   dom.splitControlGroup.classList.toggle("hidden", state.layoutMode !== "split");
-  drawFrameOnce();
+  updateStageClasses();
+  if (!dom.mainVideo.paused) playSyncedVideos();
 });
+
+function updateStageClasses() {
+  const ratioCls = FRAME_DIMS[state.aspectRatio]?.cls || "ratio-9-16";
+  dom.frameStage.className = `frame-stage ${ratioCls} mode-${state.layoutMode}`;
+}
 
 dom.faceTrackToggle.addEventListener("change", (e) => {
   state.autoTrack = e.target.checked;
@@ -200,7 +265,7 @@ dom.manualX1.addEventListener("input", (e) => {
   if (!state.autoTrack) {
     state.targetX1 = state.manualX1;
     state.smoothX1 = state.manualX1;
-    drawFrameOnce();
+    applyCameraPosition();
   }
 });
 
@@ -211,259 +276,109 @@ dom.manualX2.addEventListener("input", (e) => {
   if (!state.autoTrack) {
     state.targetX2 = state.manualX2;
     state.smoothX2 = state.manualX2;
-    drawFrameOnce();
+    applyCameraPosition();
   }
 });
 
-// =========================================================================
-// 3. PELACAK WAJAH & SUBJEK OTOMATIS
-// =========================================================================
-let lastDetectTime = 0;
+let lastTrackTick = 0;
 
-async function detectFocusPoint(now) {
-  if (!state.autoTrack || state.layoutMode === "blur") return;
-  if (dom.sourceVideo.readyState < 2 || dom.sourceVideo.paused) return;
-  if (now - lastDetectTime < 200) return;
-  lastDetectTime = now;
+async function trackSubjectLoop(now) {
+  if (state.autoTrack && !dom.mainVideo.paused && dom.mainVideo.readyState >= 2 && now - lastTrackTick > 220) {
+    lastTrackTick = now;
+    const vw = dom.mainVideo.videoWidth;
+    const vh = dom.mainVideo.videoHeight;
 
-  const vw = dom.sourceVideo.videoWidth;
-  const vh = dom.sourceVideo.videoHeight;
-  if (!vw || !vh) return;
-
-  if (nativeFaceDetector) {
-    try {
-      const faces = await nativeFaceDetector.detect(dom.sourceVideo);
-      if (faces && faces.length > 0) {
-        faces.sort((a, b) => a.boundingBox.x - b.boundingBox.x);
-        const f1 = faces[0].boundingBox;
-        state.targetX1 = clamp((f1.x + f1.width * 0.5) / vw, 0.15, 0.85);
-        state.targetY1 = clamp((f1.y + f1.height * 0.45) / vh, 0.2, 0.8);
-        if (faces.length > 1) {
-          const f2 = faces[faces.length - 1].boundingBox;
-          state.targetX2 = clamp((f2.x + f2.width * 0.5) / vw, 0.15, 0.85);
-        }
-        return;
+    if (vw && vh) {
+      let detected = false;
+      if (nativeFaceDetector) {
+        try {
+          const faces = await nativeFaceDetector.detect(dom.mainVideo);
+          if (faces && faces.length > 0) {
+            faces.sort((a, b) => a.boundingBox.x - b.boundingBox.x);
+            const f1 = faces[0].boundingBox;
+            state.targetX1 = clamp((f1.x + f1.width * 0.5) / vw, 0.12, 0.88);
+            state.targetY1 = clamp((f1.y + f1.height * 0.45) / vh, 0.2, 0.8);
+            if (faces.length > 1) {
+              const f2 = faces[faces.length - 1].boundingBox;
+              state.targetX2 = clamp((f2.x + f2.width * 0.5) / vw, 0.12, 0.88);
+            }
+            detected = true;
+          }
+        } catch (_) {}
       }
-    } catch (_) {}
-  }
 
-  // Fallback centroid warna kulit & area fokus tengah-atas
-  trackCtx.drawImage(dom.sourceVideo, 0, 0, 64, 36);
-  const data = trackCtx.getImageData(0, 0, 64, 36).data;
-  let wL = 0, xL = 0, wR = 0, xR = 0, wT = 0, xT = 0, yT = 0;
+      if (!detected) {
+        try {
+          trackCtx.drawImage(dom.mainVideo, 0, 0, 64, 36);
+          const data = trackCtx.getImageData(0, 0, 64, 36).data;
+          let wL = 0, xL = 0, wR = 0, xR = 0, wT = 0, xT = 0, yT = 0;
 
-  for (let y = 3; y < 30; y++) {
-    for (let x = 2; x < 62; x++) {
-      const i = (y * 64 + x) * 4;
-      const r = data[i], g = data[i + 1], b = data[i + 2];
-      if (r > 75 && g > 40 && b > 25 && r > g && r > b && Math.abs(r - g) > 12) {
-        const nx = x / 64;
-        const ny = y / 36;
-        wT++; xT += nx; yT += ny;
-        if (nx < 0.5) { wL++; xL += nx; } else { wR++; xR += nx; }
+          for (let y = 3; y < 30; y++) {
+            for (let x = 2; x < 62; x++) {
+              const i = (y * 64 + x) * 4;
+              const r = data[i], g = data[i + 1], b = data[i + 2];
+              if (r > 75 && g > 40 && b > 25 && r > g && r > b && Math.abs(r - g) > 12) {
+                const nx = x / 64;
+                const ny = y / 36;
+                wT++; xT += nx; yT += ny;
+                if (nx < 0.5) { wL++; xL += nx; } else { wR++; xR += nx; }
+              }
+            }
+          }
+
+          if (wT > 6) {
+            if (state.layoutMode === "split" && wL > 3 && wR > 3) {
+              state.targetX1 = clamp(xL / wL, 0.12, 0.48);
+              state.targetX2 = clamp(xR / wR, 0.52, 0.88);
+            } else {
+              state.targetX1 = clamp(xT / wT, 0.15, 0.85);
+              state.targetY1 = clamp(yT / wT, 0.2, 0.8);
+            }
+          }
+        } catch (_) {}
       }
     }
   }
 
-  if (wT > 6) {
-    if (state.layoutMode === "split" && wL > 3 && wR > 3) {
-      state.targetX1 = clamp(xL / wL, 0.15, 0.45);
-      state.targetX2 = clamp(xR / wR, 0.55, 0.85);
-    } else {
-      state.targetX1 = clamp(xT / wT, 0.15, 0.85);
-      state.targetY1 = clamp(yT / wT, 0.2, 0.8);
-    }
-  }
-}
+  // Smooth gimbal movement
+  state.smoothX1 += (state.targetX1 - state.smoothX1) * 0.15;
+  state.smoothY1 += (state.targetY1 - state.smoothY1) * 0.15;
+  state.smoothX2 += (state.targetX2 - state.smoothX2) * 0.15;
+  applyCameraPosition();
 
-function clamp(v, min, max) {
-  return Math.max(min, Math.min(max, v));
-}
-
-// =========================================================================
-// 4. RENDER LOOP KANVAS
-// =========================================================================
-function drawFrameOnce() {
-  const cw = dom.stageCanvas.width;
-  const ch = dom.stageCanvas.height;
-
-  ctx.fillStyle = "#000000";
-  ctx.fillRect(0, 0, cw, ch);
-
-  if (dom.sourceVideo.readyState >= 2 && dom.sourceVideo.videoWidth > 0) {
-    if (state.layoutMode === "blur") {
-      drawFullWithBlurBackdrop(dom.sourceVideo, cw, ch);
-    } else if (state.layoutMode === "split") {
-      const halfH = Math.floor(ch / 2);
-      drawCroppedVideo(dom.sourceVideo, 0, 0, cw, halfH - 2, state.smoothX1, 0.45);
-      drawCroppedVideo(dom.sourceVideo, 0, halfH + 2, cw, halfH - 2, state.smoothX2, 0.45);
-    } else {
-      drawCroppedVideo(dom.sourceVideo, 0, 0, cw, ch, state.smoothX1, state.smoothY1);
-    }
-  } else {
-    ctx.fillStyle = "#141923";
-    ctx.fillRect(0, 0, cw, ch);
-    ctx.fillStyle = "#94a3b8";
-    ctx.font = "bold 20px system-ui";
-    ctx.textAlign = "center";
-    ctx.fillText(`Bingkai ${state.aspectRatio} (${cw}×${ch})`, cw / 2, ch / 2 - 12);
-    ctx.font = "15px system-ui";
-    ctx.fillText("Ketuk 'Masukkan Video' di atas", cw / 2, ch / 2 + 18);
-  }
-
-  drawOverlays(cw, ch);
-}
-
-function renderLoop(now) {
-  detectFocusPoint(now);
-
-  const ease = 0.15;
-  state.smoothX1 += (state.targetX1 - state.smoothX1) * ease;
-  state.smoothY1 += (state.targetY1 - state.smoothY1) * ease;
-  state.smoothX2 += (state.targetX2 - state.smoothX2) * ease;
-
-  if (!dom.sourceVideo.paused && dom.sourceVideo.readyState >= 2) {
-    drawFrameOnce();
-    const cur = dom.sourceVideo.currentTime || 0;
-    const dur = dom.sourceVideo.duration || 0;
+  if (!dom.mainVideo.paused && dom.mainVideo.readyState >= 2) {
+    const cur = dom.mainVideo.currentTime || 0;
+    const dur = dom.mainVideo.duration || 0;
     dom.videoSeekBar.value = cur;
     dom.timeDisplay.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
   }
 
   if (state.isPlayingSequence && state.activeClipIndex >= 0) {
     const activeClip = state.clips[state.activeClipIndex];
-    if (activeClip && dom.sourceVideo.currentTime >= activeClip.end) {
+    if (activeClip && dom.mainVideo.currentTime >= activeClip.end) {
       advanceSequence();
     }
   }
 
-  requestAnimationFrame(renderLoop);
+  requestAnimationFrame(trackSubjectLoop);
 }
 
-function drawCroppedVideo(video, dx, dy, dw, dh, focusX, focusY) {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (!vw || !vh) return;
-
-  const targetRatio = dw / dh;
-  const sourceRatio = vw / vh;
-  let sw, sh, sx, sy;
-
-  if (sourceRatio > targetRatio) {
-    sh = vh;
-    sw = vh * targetRatio;
-    sx = clamp(focusX * vw - sw / 2, 0, vw - sw);
-    sy = 0;
-  } else {
-    sw = vw;
-    sh = vw / targetRatio;
-    sx = 0;
-    sy = clamp(focusY * vh - sh / 2, 0, vh - sh);
-  }
-
-  ctx.drawImage(video, sx, sy, sw, sh, dx, dy, dw, dh);
+function applyCameraPosition() {
+  dom.mainVideo.style.objectPosition = `${(state.smoothX1 * 100).toFixed(1)}% ${(state.smoothY1 * 100).toFixed(1)}%`;
+  dom.splitBottomVideo.style.objectPosition = `${(state.smoothX2 * 100).toFixed(1)}% 45%`;
 }
 
-function drawFullWithBlurBackdrop(video, cw, ch) {
-  const vw = video.videoWidth;
-  const vh = video.videoHeight;
-  if (!vw || !vh) return;
-
-  // 1. Latar belakang penuh dengan blur & redup
-  ctx.save();
-  try { ctx.filter = "blur(16px) brightness(0.55)"; } catch (_) {}
-  drawCroppedVideo(video, 0, 0, cw, ch, 0.5, 0.5);
-  ctx.restore();
-
-  ctx.fillStyle = "rgba(0, 0, 0, 0.35)";
-  ctx.fillRect(0, 0, cw, ch);
-
-  // 2. Video asli utuh di tengah (tidak terpotong)
-  const scale = Math.min(cw / vw, ch / vh);
-  const drawW = vw * scale;
-  const drawH = vh * scale;
-  const drawX = (cw - drawW) / 2;
-  const drawY = (ch - drawH) / 2;
-  ctx.drawImage(video, 0, 0, vw, vh, drawX, drawY, drawW, drawH);
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
 }
 
-function drawOverlays(cw, ch) {
-  if (state.overlayHook) {
-    const boxY = Math.round(ch * 0.06);
-    ctx.fillStyle = "#facc15";
-    roundRect(ctx, 24, boxY, cw - 48, 58, 10, true);
-    ctx.fillStyle = "#0f172a";
-    ctx.font = "900 20px system-ui";
-    ctx.textAlign = "center";
-    ctx.fillText(state.overlayHook.toUpperCase().slice(0, 36), cw / 2, boxY + 36);
-  }
-
-  if (state.overlaySub) {
-    const subY = Math.round(ch * 0.80);
-    ctx.fillStyle = "rgba(0, 0, 0, 0.78)";
-    roundRect(ctx, 24, subY - 30, cw - 48, 50, 8, true);
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "700 17px system-ui";
-    ctx.textAlign = "center";
-    ctx.fillText(state.overlaySub.slice(0, 46), cw / 2, subY + 2);
-  }
-
-  if (state.overlayCta) {
-    const ctaY = Math.round(ch * 0.89);
-    ctx.fillStyle = "#ef4444";
-    roundRect(ctx, 24, ctaY - 28, cw - 48, 48, 8, true);
-    ctx.fillStyle = "#ffffff";
-    ctx.font = "800 16px system-ui";
-    ctx.textAlign = "center";
-    ctx.fillText(state.overlayCta.slice(0, 44), cw / 2, ctaY + 2);
-  }
-}
-
-function roundRect(context, x, y, width, height, radius, fill) {
-  context.beginPath();
-  context.moveTo(x + radius, y);
-  context.lineTo(x + width - radius, y);
-  context.quadraticCurveTo(x + width, y, x + width, y + radius);
-  context.lineTo(x + width, y + height - radius);
-  context.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
-  context.lineTo(x + radius, y + height);
-  context.quadraticCurveTo(x, y + height, x, y + height - radius);
-  context.lineTo(x, y + radius);
-  context.quadraticCurveTo(x, y, x + radius, y);
-  context.closePath();
-  if (fill) context.fill();
-}
-
-requestAnimationFrame(renderLoop);
+requestAnimationFrame(trackSubjectLoop);
 
 // =========================================================================
-// 5. CUTTER OTOMATIS UNIVERSAL (BISA TANPA TRANSKRIP MAUPUN PAKAI BRIEF/AI)
+// 4. CUTTER OTOMATIS UNIVERSAL
 // =========================================================================
-dom.rawBriefInput.addEventListener("blur", extractBriefRules);
-
-function extractBriefRules() {
-  const raw = dom.rawBriefInput.value;
-  if (!raw.trim()) return;
-
-  const durMatch = raw.match(/(\d{2,3})\s*[-–]\s*(\d{2,3})\s*detik/i);
-  if (durMatch) {
-    dom.briefMinDur.value = durMatch[1];
-    dom.briefMaxDur.value = durMatch[2];
-  }
-  const titleMatch = raw.match(/Judul[:\s]*["“]([^"”]+)["”]/i);
-  if (titleMatch) dom.briefHook.value = titleMatch[1];
-
-  const ctaMatch = raw.match(/CTA[:\s]*["“]([^"”]+)["”]/i);
-  if (ctaMatch) dom.briefCta.value = ctaMatch[1];
-
-  const prodMatch = raw.match(/produk\s+([A-Za-z0-9\s]+?)(?:\s+secara|\n|$)/i);
-  if (prodMatch) dom.briefBrand.value = prodMatch[1].trim();
-}
-
 dom.btnAutoCut.addEventListener("click", async () => {
-  extractBriefRules();
-
-  const videoDur = dom.sourceVideo.duration || 0;
+  const videoDur = dom.mainVideo.duration || 0;
   const rawTranscript = dom.transcriptInput.value.trim();
   const niche = NICHE_PRESETS[dom.nicheSelect.value] || NICHE_PRESETS.general;
 
@@ -483,12 +398,11 @@ dom.btnAutoCut.addEventListener("click", async () => {
 
   const apiKey = dom.geminiKey.value.trim();
 
-  // Mode 1: Jika ada transkrip/SRT -> potong berdasarkan dialog/briefing
   if (rawTranscript) {
     const entries = parseTranscriptLines(rawTranscript);
     if (entries.length > 0) {
       if (apiKey) {
-        dom.cutStatus.textContent = "🤖 Memotong momen cerdas dengan Gemini AI...";
+        dom.cutStatus.textContent = "🤖 AI sedang menganalisis transkrip...";
         try {
           state.clips = await cutWithGeminiAI(apiKey, entries, config);
         } catch (_) {
@@ -498,104 +412,128 @@ dom.btnAutoCut.addEventListener("click", async () => {
         state.clips = cutFromTranscriptLocal(entries, config);
       }
       renderClipTimeline(config);
-      dom.cutStatus.textContent = `✅ ${state.clips.length} potongan momen ditemukan dari transkrip!`;
+      dom.cutStatus.textContent = `✅ ${state.clips.length} potongan ditemukan dari transkrip!`;
       return;
     }
   }
 
-  // Mode 2: Auto-Scan Video Langsung (Cocok untuk Otomotif, Gaming, Review Produk, Vlog tanpa SRT)
   state.clips = cutVideoTimelineAutomatically(videoDur, config);
   renderClipTimeline(config);
-  dom.cutStatus.textContent = `✅ Video (${formatTime(videoDur)}) otomatis dipotong menjadi ${state.clips.length} segmen highlight!`;
+  dom.cutStatus.textContent = `✅ Video (${formatTime(videoDur)}) otomatis dipotong menjadi ${state.clips.length} segmen!`;
 });
 
 function cutVideoTimelineAutomatically(totalVideoDur, config) {
   const safeDur = Math.max(6, totalVideoDur);
   const targetTotal = clamp(Math.round((config.minDur + config.maxDur) / 2), 10, Math.floor(safeDur));
 
-  // Jika video pendek (<= target durasi), ambil utuh + hook + CTA
   if (safeDur <= config.maxDur) {
     const cuts = [];
     if (dom.briefHook.value.trim()) {
-      cuts.push({
-        role: "Hook Pembuka (0-3d)",
-        type: "hook",
-        start: 0,
-        end: Math.min(3, safeDur),
-        text: config.hook,
-      });
+      cuts.push({ role: "Hook Pembuka (0-3d)", type: "hook", start: 0, end: Math.min(3, safeDur), text: config.hook });
     }
-    cuts.push({
-      role: "Klip Utama Utuh",
-      type: "moment",
-      start: 0,
-      end: Math.floor(safeDur),
-      text: "Bagian utama video",
-    });
+    cuts.push({ role: "Klip Utama Utuh", type: "moment", start: 0, end: Math.floor(safeDur), text: "Bagian utama video" });
     if (config.cta) {
-      cuts.push({
-        role: "CTA Akhir",
-        type: "cta",
-        start: Math.max(0, Math.floor(safeDur) - 3),
-        end: Math.floor(safeDur),
-        text: config.cta,
-      });
+      cuts.push({ role: "CTA Akhir", type: "cta", start: Math.max(0, Math.floor(safeDur) - 3), end: Math.floor(safeDur), text: config.cta });
     }
     return cuts;
   }
 
-  // Bagi video panjang menjadi 3 bagian highlight (Pembuka Aksi, Puncak Tengah, Penutup)
   const segLen = Math.max(5, Math.floor(targetTotal / 3));
   const p1 = Math.floor(safeDur * 0.12);
   const p2 = Math.floor(safeDur * 0.48);
   const p3 = Math.max(p2 + segLen + 2, Math.floor(safeDur * 0.80));
 
   const cuts = [
-    {
-      role: "Hook Pembuka (0-3d)",
-      type: "hook",
-      start: p2,
-      end: Math.min(safeDur, p2 + 3),
-      text: config.hook,
-    },
-    {
-      role: "Highlight #1 (Awal)",
-      type: "moment",
-      start: p1,
-      end: Math.min(safeDur, p1 + segLen),
-      text: "Momen pembuka pilihan",
-    },
-    {
-      role: "Highlight #2 (Klimaks)",
-      type: "moment",
-      start: p2,
-      end: Math.min(safeDur, p2 + segLen),
-      text: "Momen puncak utama",
-    },
-    {
-      role: "Highlight #3 (Penutup)",
-      type: "product",
-      start: Math.min(safeDur - segLen, p3),
-      end: Math.min(safeDur, p3 + segLen),
-      text: "Momen penutup / detail akhir",
-    },
+    { role: "Hook Pembuka (0-3d)", type: "hook", start: p2, end: Math.min(safeDur, p2 + 3), text: config.hook },
+    { role: "Highlight #1 (Awal)", type: "moment", start: p1, end: Math.min(safeDur, p1 + segLen), text: "Momen pembuka pilihan" },
+    { role: "Highlight #2 (Klimaks)", type: "moment", start: p2, end: Math.min(safeDur, p2 + segLen), text: "Momen puncak utama" },
+    { role: "Highlight #3 (Penutup)", type: "product", start: Math.min(safeDur - segLen, p3), end: Math.min(safeDur, p3 + segLen), text: "Momen penutup / detail akhir" },
   ];
 
   if (config.cta) {
     const last = cuts[cuts.length - 1];
-    cuts.push({
-      role: "CTA Akhir",
-      type: "cta",
-      start: Math.max(last.start, last.end - 3),
-      end: last.end,
-      text: config.cta,
-    });
+    cuts.push({ role: "CTA Akhir", type: "cta", start: Math.max(last.start, last.end - 3), end: last.end, text: config.cta });
   }
-
   return cuts;
 }
 
 function parseTranscriptLines(raw) {
   const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const result = [];
-  const s
+  const srtTime = /(\d{1,2}:\d{2}:\d{2})[,.]\d+\s*-->\s*(\d{1,2}:\d{2}:\d{2})[,.]\d+/;
+
+  for (let i = 0; i < lines.length; i++) {
+    const mSrt = lines[i].match(srtTime);
+    if (mSrt) {
+      const start = toSeconds(mSrt[1]);
+      const end = Math.max(toSeconds(mSrt[2]), start + 4);
+      const text = lines[i + 1] || "";
+      if (text) result.push({ start, end, text });
+      continue;
+    }
+    const mSimple = lines[i].match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+(.+)$/);
+    if (mSimple) {
+      const start = toSeconds(mSimple[1]);
+      result.push({ start, end: start + 7, text: mSimple[2] });
+    }
+  }
+  return result;
+}
+
+function toSeconds(str) {
+  const p = str.split(":").map(Number);
+  return p.length === 3 ? p[0] * 3600 + p[1] * 60 + p[2] : p[0] * 60 + p[1];
+}
+
+function formatTime(sec) {
+  const s = Math.max(0, Math.floor(sec));
+  return `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function cutFromTranscriptLocal(entries, config) {
+  const keywords = config.brand.toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+  let prodIdx = keywords.length > 0
+    ? entries.findIndex((e) => keywords.some((kw) => e.text.toLowerCase().includes(kw)))
+    : -1;
+
+  const cuts = [
+    { role: "Hook Pembuka (0-3d)", type: "hook", start: entries[0].start, end: entries[0].start + 3, text: config.hook },
+  ];
+
+  entries.slice(0, 3).forEach((e, i) => {
+    cuts.push({ role: `Momen #${i + 1}`, type: "moment", start: e.start, end: e.end, text: e.text });
+  });
+
+  if (prodIdx !== -1) {
+    cuts.push({
+      role: "Penutup Produk / Topik Wajib",
+      type: "product",
+      start: entries[prodIdx].start,
+      end: entries[Math.min(entries.length - 1, prodIdx + 1)].end,
+      text: entries[prodIdx].text,
+    });
+  }
+
+  if (config.cta) {
+    const last = cuts[cuts.length - 1];
+    cuts.push({ role: "CTA Akhir", type: "cta", start: Math.max(last.start, last.end - 3), end: last.end, text: config.cta });
+  }
+  return cuts;
+}
+
+async function cutWithGeminiAI(apiKey, entries, config) {
+  const scriptText = entries.map((e) => `[${formatTime(e.start)}-${formatTime(e.end)}] ${e.text}`).join("\n");
+  const prompt = `Pilih potongan klip terbaik dari transkrip berikut:
+Topik/Produk: ${config.brand}
+Durasi total: ${config.minDur}-${config.maxDur} detik.
+Transkrip:\n${scriptText}
+Balas JSON array murni: [{"role":"...","type":"hook|moment|product|cta","start":10,"end":22,"text":"..."}]`;
+
+  const res = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${encodeURIComponent(apiKey)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+    
